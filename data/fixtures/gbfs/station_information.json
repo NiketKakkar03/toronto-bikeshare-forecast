@@ -1,0 +1,33 @@
+{
+  "last_updated": "2026-09-16T12:00:00Z",
+  "ttl": 60,
+  "version": "3.0",
+  "data": {
+    "stations": [
+      {
+        "station_id": "7001",
+        "external_id": "synthetic-7001",
+        "name": [
+          {
+            "text": "Synthetic Station",
+            "language": "en"
+          },
+          {
+            "text": "Station synthétique",
+            "language": "fr"
+          }
+        ],
+        "lat": 43.6532,
+        "lon": -79.3832,
+        "capacity": 15,
+        "vehicle_docks_capacity": [
+          {
+            "vehicle_type_ids": ["ICONIC", "EFIT"],
+            "count": 15
+          }
+        ],
+        "address": "1 Synthetic Street"
+      }
+    ]
+  }
+}

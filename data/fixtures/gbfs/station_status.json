@@ -1,0 +1,36 @@
+{
+  "last_updated": "2026-09-16T12:00:00Z",
+  "ttl": 15,
+  "version": "3.0",
+  "data": {
+    "stations": [
+      {
+        "station_id": "7001",
+        "num_vehicles_available": 4,
+        "num_vehicles_disabled": 0,
+        "num_docks_available": 11,
+        "num_docks_disabled": 0,
+        "is_installed": true,
+        "is_renting": true,
+        "is_returning": true,
+        "last_reported": "2026-09-16T11:59:45Z",
+        "vehicle_docks_available": [
+          {
+            "vehicle_type_ids": ["ICONIC", "EFIT"],
+            "count": 11
+          }
+        ],
+        "vehicle_types_available": [
+          {
+            "vehicle_type_id": "ICONIC",
+            "count": 3
+          },
+          {
+            "vehicle_type_id": "EFIT",
+            "count": 1
+          }
+        ]
+      }
+    ]
+  }
+}

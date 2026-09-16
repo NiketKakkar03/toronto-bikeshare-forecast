@@ -1,0 +1,15 @@
+[gbfs]
+discovery_url = "https://toronto.publicbikesystem.net/customer/gbfs/v3.0/gbfs.json"
+source_system_id = "bike_share_toronto"
+poll_interval_seconds = 300
+freshness_threshold_seconds = 600
+request_timeout_seconds = 15
+max_attempts = 3
+
+[validation]
+toronto_latitude_min = 43.4
+toronto_latitude_max = 44.0
+toronto_longitude_min = -79.8
+toronto_longitude_max = -79.0
+future_timestamp_tolerance_seconds = 60
+
