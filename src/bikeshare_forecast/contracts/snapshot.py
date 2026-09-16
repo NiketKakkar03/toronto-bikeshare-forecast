@@ -36,3 +36,8 @@ class StationSnapshot(BaseModel):
         if utc_offset.total_seconds() != 0:
             raise ValueError("timestamp must be UTC")
         return value
+
+    @property
+    def identity(self) -> tuple[str, datetime, str]:
+        """Return the durable identity used for idempotent writes."""
+        return (self.station_id, self.source_last_reported_at, self.source_system_id)
