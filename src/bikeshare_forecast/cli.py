@@ -13,6 +13,7 @@ from bikeshare_forecast.ingestion import (
     TorontoRidershipV1Adapter,
 )
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
+from bikeshare_forecast.ml import DatasetConfig, build_dataset, evaluate_run, train_models
 from bikeshare_forecast.storage import DuckDBCatalogue, HistoricalStore
 
 app = typer.Typer(no_args_is_help=True)
@@ -169,6 +170,40 @@ def historical_summary(
     typer.echo(f"accepted_rows: {sum(item.accepted_rows for item in summaries)}")
     typer.echo(f"rejected_rows: {sum(item.rejected_rows for item in summaries)}")
     typer.echo(f"duplicate_rows: {sum(item.duplicate_rows for item in summaries)}")
+
+
+@app.command("dataset-build")
+def dataset_build(
+    silver_dir: Annotated[Path, typer.Option()] = Path("data/silver/station_snapshots"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    target_tolerance_minutes: Annotated[int, typer.Option(min=0)] = 5,
+) -> None:
+    """Build a point-in-time dataset with 15/30/60-minute targets."""
+    path = build_dataset(
+        silver_dir,
+        output_dir,
+        DatasetConfig(target_tolerance_minutes=target_tolerance_minutes),
+    )
+    typer.echo(path)
+
+
+@app.command("train")
+def train(
+    dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
+) -> None:
+    """Train deterministic logistic unavailability classifiers."""
+    typer.echo(train_models(dataset_dir, output_dir))
+
+
+@app.command("evaluate")
+def evaluate(
+    dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/evaluation"),
+) -> None:
+    """Evaluate classifiers and inventory baselines on the held-out test split."""
+    typer.echo(evaluate_run(dataset_dir, model_dir, output_dir))
 
 
 if __name__ == "__main__":
