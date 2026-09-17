@@ -1,0 +1,12 @@
+[dataset]
+horizons_minutes = [15, 30, 60]
+target_tolerance_minutes = 3
+unavailable_bikes_threshold = 0
+unavailable_docks_threshold = 0
+train_fraction = 0.70
+validation_fraction = 0.15
+
+[backtest]
+folds = 3
+minimum_train_fraction = 0.50
+evaluation_fraction = 0.10

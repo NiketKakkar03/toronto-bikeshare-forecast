@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from bikeshare_forecast.cli import app
 from bikeshare_forecast.contracts import StationSnapshot
-from bikeshare_forecast.ml import build_dataset, evaluate_run, train_models
+from bikeshare_forecast.ml import backtest_run, build_dataset, evaluate_run, train_models
 from bikeshare_forecast.ml.common import read_json
 from bikeshare_forecast.storage import SilverStore
 
@@ -71,8 +71,14 @@ def test_pipeline_is_deterministic_point_in_time_and_persists_artifacts(tmp_path
     report = read_json(evaluate_run(first, models, report_dir))
     assert report["rows"] > 0
     assert set(report["metrics"]) == {"15m", "30m", "60m"}
-    assert "roc_auc" in report["metrics"]["15m"]["classification"]["logistic"]
-    assert "rmse" in report["metrics"]["60m"]["inventory_regression"]["persistence"]
+    assert "roc_auc" in report["metrics"]["15m"]["classification"]["empty"]["logistic"]
+    assert "f1" in report["metrics"]["30m"]["classification"]["full"]["logistic"]
+    assert "rmse" in report["metrics"]["60m"]["inventory_regression"]["bikes"]["persistence"]
+    assert "mae" in report["metrics"]["15m"]["inventory_regression"]["docks"]["seasonal"]
+
+    backtest = read_json(backtest_run(first, tmp_path / "backtest", folds=2))
+    assert backtest["fold_count"] == 2
+    assert len(backtest["fold_reports"]) == 2
 
 
 def test_pipeline_cli_commands(tmp_path: Path) -> None:

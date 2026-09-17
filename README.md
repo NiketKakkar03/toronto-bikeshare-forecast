@@ -4,11 +4,12 @@ An independent, public-data project for predicting whether a Toronto Bike Share 
 have a rentable bike or an open dock 15, 30, or 60 minutes in the future. The initial product
 focus is the 30-minute horizon and honest probabilities rather than guaranteed inventory.
 
-This repository contains the Milestone 0 contracts plus the storage and validation portion of
-Milestone 1. Validated GBFS models can be captured as immutable, content-addressed JSON; station
-information and status can be normalized with explicit quality reports; and valid snapshots can
-be persisted as append-only Parquet and queried through a DuckDB catalogue. It does not yet run
-live HTTP collection or produce forecasts.
+This repository contains the data foundation and reproducible offline baseline workflow. A
+one-shot command discovers and collects live GBFS station feeds, captures immutable raw JSON,
+validates and persists normalized Parquet snapshots, and prevents duplicate observations. The
+offline ML commands build point-in-time datasets, train deterministic empty/full logistic
+baselines, evaluate bike/dock persistence and seasonal baselines, and run expanding-window
+backtests. It does not yet provide a deployed forecast API or public interface.
 
 GBFS v3 calls rentable bikes and e-bikes `vehicles`. The source contract therefore uses
 `num_vehicles_available`; a later normalization step will map that source terminology into the
@@ -60,6 +61,21 @@ uv run bikeshare data-summary \
   --catalogue data/catalogue.duckdb
 ```
 
+Collect one live snapshot (scheduling remains an operator responsibility):
+
+```bash
+uv run bikeshare ingest-stations
+```
+
+Build and evaluate the offline baselines:
+
+```bash
+uv run bikeshare dataset-build
+uv run bikeshare train
+uv run bikeshare evaluate
+uv run bikeshare backtest
+```
+
 The snapshot identity is `(station_id, source_last_reported_at, source_system_id)`. Recollecting
 the same source state is an idempotent no-op even when ingestion lineage differs; conflicting
 states for the same identity are rejected. Validation reports retain missing-station, coverage,
@@ -70,8 +86,10 @@ freshness, future-time, and capacity failures instead of filling absent observat
 - `src/bikeshare_forecast/contracts/`: source and normalized data contracts
 - `src/bikeshare_forecast/storage/`: immutable JSON, Parquet, and DuckDB catalogue interfaces
 - `src/bikeshare_forecast/validation/`: GBFS normalization and quality reporting
+- `src/bikeshare_forecast/ml/`: point-in-time datasets, baselines, evaluation, and backtesting
 - `tests/`: unit and contract tests
 - `configs/collection.toml`: initial collection and freshness policy
+- `configs/training.toml`: dataset split, label, and backtest policy
 - `data/fixtures/gbfs/`: small synthetic GBFS v3 responses
 - `docs/prediction-contract.md`: forecast-time and label semantics
 - `docs/data-sources.md`: licences, attribution, and source boundaries

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from bisect import bisect_left
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -31,10 +32,25 @@ class DatasetConfig:
     """Label matching and chronological split policy."""
 
     horizons_minutes: tuple[int, ...] = HORIZONS_MINUTES
-    target_tolerance_minutes: int = 5
+    target_tolerance_minutes: int = 3
     unavailable_bikes_threshold: int = 0
-    train_fraction: float = 0.6
-    validation_fraction: float = 0.2
+    unavailable_docks_threshold: int = 0
+    train_fraction: float = 0.7
+    validation_fraction: float = 0.15
+
+    @classmethod
+    def from_toml(cls, path: Path) -> DatasetConfig:
+        """Load the versioned dataset policy from a TOML file."""
+        with path.open("rb") as handle:
+            values = tomllib.load(handle)["dataset"]
+        return cls(
+            horizons_minutes=tuple(int(value) for value in values["horizons_minutes"]),
+            target_tolerance_minutes=int(values["target_tolerance_minutes"]),
+            unavailable_bikes_threshold=int(values["unavailable_bikes_threshold"]),
+            unavailable_docks_threshold=int(values["unavailable_docks_threshold"]),
+            train_fraction=float(values["train_fraction"]),
+            validation_fraction=float(values["validation_fraction"]),
+        )
 
 
 def _nearest_index(times: list[datetime], target: datetime, tolerance: timedelta) -> int | None:
@@ -64,18 +80,27 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
 
     source_files = _snapshot_files(silver_dir)
     frame = pl.concat([pl.read_parquet(path) for path in source_files]).sort(
-        ["station_id", "source_last_reported_at"]
+        ["station_id", "ingested_at", "source_last_reported_at"]
     )
     rows: list[dict[str, object]] = []
     tolerance = timedelta(minutes=policy.target_tolerance_minutes)
     for station in frame.partition_by("station_id", maintain_order=True):
         values = station.to_dicts()
-        times = [value["source_last_reported_at"] for value in values]
-        assert all(isinstance(value, datetime) for value in times)
-        for index, current in enumerate(values):
-            now = times[index]
-            lag_15 = _nearest_index(times[: index + 1], now - timedelta(minutes=15), tolerance)
-            lag_60 = _nearest_index(times[: index + 1], now - timedelta(minutes=60), tolerance)
+        targets = sorted(values, key=lambda value: value["source_last_reported_at"])
+        target_times = [value["source_last_reported_at"] for value in targets]
+        assert all(isinstance(value, datetime) for value in target_times)
+        for current in values:
+            now = current["ingested_at"]
+            if not isinstance(now, datetime):
+                raise ValueError("ingested_at must be a datetime")
+            history = [
+                value
+                for value in targets
+                if value["ingested_at"] <= now and value["source_last_reported_at"] <= now
+            ]
+            history_times = [value["source_last_reported_at"] for value in history]
+            lag_15 = _nearest_index(history_times, now - timedelta(minutes=15), tolerance)
+            lag_60 = _nearest_index(history_times, now - timedelta(minutes=60), tolerance)
             minute = now.hour * 60 + now.minute
             weekday = now.weekday()
             import math
@@ -96,23 +121,30 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
                 "weekday_sin": math.sin(2 * math.pi * weekday / 7),
                 "weekday_cos": math.cos(2 * math.pi * weekday / 7),
                 "bikes_lag_15m": (
-                    float(values[lag_15]["bikes_available"]) if lag_15 is not None else None
+                    float(history[lag_15]["bikes_available"]) if lag_15 is not None else None
                 ),
                 "bikes_lag_60m": (
-                    float(values[lag_60]["bikes_available"]) if lag_60 is not None else None
+                    float(history[lag_60]["bikes_available"]) if lag_60 is not None else None
                 ),
             }
             complete = True
             for horizon in policy.horizons_minutes:
-                target_index = _nearest_index(times, now + timedelta(minutes=horizon), tolerance)
-                if target_index is None or times[target_index] <= now:
+                target_index = _nearest_index(
+                    target_times, now + timedelta(minutes=horizon), tolerance
+                )
+                if target_index is None or target_times[target_index] <= now:
                     complete = False
                     break
-                target_bikes = int(values[target_index]["bikes_available"])
-                features[f"target_time_{horizon}m"] = times[target_index]
+                target_bikes = int(targets[target_index]["bikes_available"])
+                features[f"target_time_{horizon}m"] = target_times[target_index]
                 features[f"target_bikes_{horizon}m"] = target_bikes
                 features[f"target_unavailable_{horizon}m"] = int(
                     target_bikes <= policy.unavailable_bikes_threshold
+                )
+                target_docks = int(targets[target_index]["docks_available"])
+                features[f"target_docks_{horizon}m"] = target_docks
+                features[f"target_full_{horizon}m"] = int(
+                    target_docks <= policy.unavailable_docks_threshold
                 )
             if complete:
                 rows.append(features)
@@ -152,12 +184,18 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
         },
         "source_files": [{"path": str(path), "sha256": sha256_file(path)} for path in source_files],
         "dataset_sha256": sha256_file(dataset_path),
-        "point_in_time_rule": "features use only the current or earlier source_last_reported_at",
+        "point_in_time_rule": (
+            "feature_time is ingested_at; current and lag values require ingested_at and "
+            "source_last_reported_at no later than feature_time"
+        ),
         "target_rule": (
             "nearest observation to feature_time + horizon within inclusive tolerance; "
             "earlier observation wins ties; target time must be after feature time"
         ),
-        "split_rule": "global feature timestamps are assigned chronologically 60%/20%/20%",
+        "split_rule": (
+            "global feature timestamps are assigned chronologically using the configured "
+            "train and validation fractions; the remainder is test"
+        ),
     }
     write_json(output_dir / "dataset-manifest.json", manifest)
     return dataset_path

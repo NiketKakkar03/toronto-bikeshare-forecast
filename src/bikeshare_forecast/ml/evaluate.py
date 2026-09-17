@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,28 @@ def _classification(labels: Sequence[int], probabilities: Sequence[float]) -> di
         if positives and negatives
         else 0.5
     )
+    ranked = sorted(zip(probabilities, labels, strict=True), reverse=True)
+    positive_count = sum(labels)
+    seen_positive = 0
+    average_precision = 0.0
+    for rank, (_, label) in enumerate(ranked, start=1):
+        if label:
+            seen_positive += 1
+            average_precision += seen_positive / rank
+    average_precision = average_precision / positive_count if positive_count else 0.0
+    calibration_error = 0.0
+    for bin_index in range(10):
+        lower = bin_index / 10
+        upper = (bin_index + 1) / 10
+        members = [
+            (label, probability)
+            for label, probability in zip(labels, probabilities, strict=True)
+            if lower <= probability < upper or (bin_index == 9 and probability == 1)
+        ]
+        if members:
+            observed = sum(label for label, _ in members) / len(members)
+            predicted = sum(probability for _, probability in members) / len(members)
+            calibration_error += len(members) / len(labels) * abs(observed - predicted)
     return {
         "accuracy": accuracy,
         "precision": precision,
@@ -68,15 +90,58 @@ def _classification(labels: Sequence[int], probabilities: Sequence[float]) -> di
         / len(labels),
         "log_loss": log_loss,
         "roc_auc": auc,
+        "precision_recall_auc": average_precision,
+        "expected_calibration_error": calibration_error,
     }
 
 
-def _regression(actual: Sequence[float], predicted: Sequence[float]) -> dict[str, float]:
+def _regression(
+    actual: Sequence[float], predicted: Sequence[float], persistence_mae: float
+) -> dict[str, float]:
     errors = [prediction - target for target, prediction in zip(actual, predicted, strict=True)]
+    mae = sum(abs(value) for value in errors) / len(errors)
     return {
-        "mae": sum(abs(value) for value in errors) / len(errors),
+        "mae": mae,
         "rmse": math.sqrt(sum(value * value for value in errors) / len(errors)),
+        "mase_vs_persistence": mae / max(persistence_mae, 1.0e-12),
     }
+
+
+def _seasonal_means(frame: pl.DataFrame, value_column: str) -> dict[tuple[str, int, int], float]:
+    """Fit station/weekday/15-minute averages using training rows only."""
+    totals: dict[tuple[str, int, int], tuple[float, int]] = {}
+    for row in frame.to_dicts():
+        timestamp = row["feature_time"]
+        if not isinstance(timestamp, datetime):
+            raise ValueError("feature_time must be a datetime")
+        key = (
+            str(row["station_id"]),
+            timestamp.weekday(),
+            timestamp.hour * 4 + timestamp.minute // 15,
+        )
+        total, count = totals.get(key, (0.0, 0))
+        totals[key] = (total + float(row[value_column]), count + 1)
+    return {key: total / count for key, (total, count) in totals.items()}
+
+
+def _seasonal_predictions(
+    rows: list[dict[str, object]], means: dict[tuple[str, int, int], float], fallback: str
+) -> list[float]:
+    values = []
+    for row in rows:
+        timestamp = row["feature_time"]
+        if not isinstance(timestamp, datetime):
+            raise ValueError("feature_time must be a datetime")
+        key = (
+            str(row["station_id"]),
+            timestamp.weekday(),
+            timestamp.hour * 4 + timestamp.minute // 15,
+        )
+        fallback_value = row[fallback]
+        if not isinstance(fallback_value, int | float):
+            raise ValueError(f"fallback {fallback} must be numeric")
+        values.append(means.get(key, float(fallback_value)))
+    return values
 
 
 def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
@@ -89,45 +154,77 @@ def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
     test = frame.filter(pl.col("split") == "test")
     if test.is_empty():
         raise ValueError("test split is empty")
-    history: dict[tuple[str, datetime], float] = {
-        (str(row["station_id"]), row["feature_time"]): float(row["bikes_available"])
-        for row in frame.to_dicts()
-    }
+    train = frame.filter(pl.col("split") == "train")
+    bike_seasonal = _seasonal_means(train, "bikes_available")
+    dock_seasonal = _seasonal_means(train, "docks_available")
     results: dict[str, object] = {}
     model_hashes: list[dict[str, str]] = []
     for horizon_value in dataset_manifest["config"]["horizons_minutes"]:
         horizon = int(horizon_value)
-        model_path = model_dir / f"logistic-{horizon}m.json"
-        model = read_json(model_path)
-        if model["dataset_sha256"] != dataset_manifest["dataset_sha256"]:
-            raise ValueError("model was trained from a different dataset")
         rows = test.to_dicts()
-        labels = [int(row[f"target_unavailable_{horizon}m"]) for row in rows]
-        probabilities = [_probability(model, row) for row in rows]
-        actual = [float(row[f"target_bikes_{horizon}m"]) for row in rows]
-        persistence = [float(row["bikes_available"]) for row in rows]
-        seasonal = [
-            history.get(
-                (str(row["station_id"]), row["feature_time"] - timedelta(days=7)),
-                float(row["bikes_available"]),
-            )
-            for row in rows
-        ]
+        classifications: dict[str, Any] = {}
+        for target, label_column, current_column in (
+            ("empty", f"target_unavailable_{horizon}m", "bikes_available"),
+            ("full", f"target_full_{horizon}m", "docks_available"),
+        ):
+            model_path = model_dir / f"logistic-{target}-{horizon}m.json"
+            model = read_json(model_path)
+            if model["dataset_sha256"] != dataset_manifest["dataset_sha256"]:
+                raise ValueError("model was trained from a different dataset")
+            labels = [int(row[label_column]) for row in rows]
+            probabilities = [_probability(model, row) for row in rows]
+            persistence_probabilities = [float(int(row[current_column] == 0)) for row in rows]
+            classifications[target] = {
+                "logistic": _classification(labels, probabilities),
+                "persistence": _classification(labels, persistence_probabilities),
+            }
+            model_hashes.append({"path": model_path.name, "sha256": sha256_file(model_path)})
+        actual_bikes = [float(row[f"target_bikes_{horizon}m"]) for row in rows]
+        actual_docks = [float(row[f"target_docks_{horizon}m"]) for row in rows]
+        persistence_bikes = [float(row["bikes_available"]) for row in rows]
+        persistence_docks = [float(row["docks_available"]) for row in rows]
+        seasonal_bikes = _seasonal_predictions(rows, bike_seasonal, "bikes_available")
+        seasonal_docks = _seasonal_predictions(rows, dock_seasonal, "docks_available")
+        bike_persistence_mae = sum(
+            abs(actual - predicted)
+            for actual, predicted in zip(actual_bikes, persistence_bikes, strict=True)
+        ) / len(rows)
+        dock_persistence_mae = sum(
+            abs(actual - predicted)
+            for actual, predicted in zip(actual_docks, persistence_docks, strict=True)
+        ) / len(rows)
+        classifications["empty"]["seasonal"] = _classification(
+            [int(row[f"target_unavailable_{horizon}m"]) for row in rows],
+            [float(int(value <= 0)) for value in seasonal_bikes],
+        )
+        classifications["full"]["seasonal"] = _classification(
+            [int(row[f"target_full_{horizon}m"]) for row in rows],
+            [float(int(value <= 0)) for value in seasonal_docks],
+        )
         results[f"{horizon}m"] = {
-            "classification": {"logistic": _classification(labels, probabilities)},
+            "classification": classifications,
             "inventory_regression": {
-                "persistence": _regression(actual, persistence),
-                "seasonal_7d": _regression(actual, seasonal),
+                "bikes": {
+                    "persistence": _regression(
+                        actual_bikes, persistence_bikes, bike_persistence_mae
+                    ),
+                    "seasonal": _regression(actual_bikes, seasonal_bikes, bike_persistence_mae),
+                },
+                "docks": {
+                    "persistence": _regression(
+                        actual_docks, persistence_docks, dock_persistence_mae
+                    ),
+                    "seasonal": _regression(actual_docks, seasonal_docks, dock_persistence_mae),
+                },
             },
         }
-        model_hashes.append({"path": model_path.name, "sha256": sha256_file(model_path)})
     report = {
         "schema_version": 1,
         "evaluation_split": "test",
         "rows": test.height,
         "dataset_sha256": dataset_manifest["dataset_sha256"],
         "models": model_hashes,
-        "seasonal_fallback": "persistence when no exact station value exists seven days earlier",
+        "seasonal_rule": "training-only station/weekday/15-minute mean; persistence fallback",
         "metrics": results,
     }
     output_dir.mkdir(parents=True, exist_ok=True)

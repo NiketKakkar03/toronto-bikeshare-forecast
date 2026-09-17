@@ -71,34 +71,37 @@ def train_models(dataset_dir: Path, output_dir: Path) -> Path:
     files: list[dict[str, object]] = []
     for horizon_value in horizons:
         horizon = int(horizon_value)
-        label_column = f"target_unavailable_{horizon}m"
         raw_rows = frame.select(FEATURE_COLUMNS).to_dicts()
-        imputation_means = [
-            sum(float(row[column]) for row in raw_rows if row[column] is not None)
-            / sum(row[column] is not None for row in raw_rows)
-            for column in FEATURE_COLUMNS
-        ]
+        imputation_means = []
+        for column in FEATURE_COLUMNS:
+            observed = [float(row[column]) for row in raw_rows if row[column] is not None]
+            imputation_means.append(sum(observed) / len(observed) if observed else 0.0)
         values = _matrix(frame, imputation_means)
-        labels = [int(value) for value in frame[label_column].to_list()]
-        weights, intercept, means, scales = _fit_logistic(values, labels)
-        model = {
-            "schema_version": 1,
-            "model_type": "deterministic_batch_logistic_regression",
-            "horizon_minutes": horizon,
-            "feature_columns": list(FEATURE_COLUMNS),
-            "imputation_means": imputation_means,
-            "standardization_means": means,
-            "standardization_scales": scales,
-            "weights": weights,
-            "intercept": intercept,
-            "decision_threshold": 0.5,
-            "training_rows": frame.height,
-            "positive_rows": sum(labels),
-            "dataset_sha256": expected_hash,
-        }
-        path = output_dir / f"logistic-{horizon}m.json"
-        write_json(path, model)
-        files.append({"path": path.name, "sha256": sha256_file(path)})
+        for target, label_column in (
+            ("empty", f"target_unavailable_{horizon}m"),
+            ("full", f"target_full_{horizon}m"),
+        ):
+            labels = [int(value) for value in frame[label_column].to_list()]
+            weights, intercept, means, scales = _fit_logistic(values, labels)
+            model = {
+                "schema_version": 1,
+                "model_type": "deterministic_batch_logistic_regression",
+                "target": target,
+                "horizon_minutes": horizon,
+                "feature_columns": list(FEATURE_COLUMNS),
+                "imputation_means": imputation_means,
+                "standardization_means": means,
+                "standardization_scales": scales,
+                "weights": weights,
+                "intercept": intercept,
+                "decision_threshold": 0.5,
+                "training_rows": frame.height,
+                "positive_rows": sum(labels),
+                "dataset_sha256": expected_hash,
+            }
+            path = output_dir / f"logistic-{target}-{horizon}m.json"
+            write_json(path, model)
+            files.append({"path": path.name, "sha256": sha256_file(path)})
     model_manifest = {
         "schema_version": 1,
         "dataset_sha256": expected_hash,

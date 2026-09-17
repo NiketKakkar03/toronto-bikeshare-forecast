@@ -24,9 +24,9 @@ Secondary count targets are rentable bikes and available docks at `target_time`.
 or full during the interval” is a different optional target and must never be substituted for
 state at the target time.
 
-Select the nearest valid station snapshot within ±3 minutes of `target_time`. If none exists,
-the example has no label. Do not interpolate a classification label across a collection gap.
-Ties require a deterministic rule defined alongside the label builder before implementation.
+Select the nearest valid station snapshot within ±3 minutes of `target_time`. An exact-distance
+tie selects the earlier snapshot. If none exists, the example has no label. Do not interpolate a
+classification label across a collection gap.
 
 ## Evaluation boundary
 
@@ -42,4 +42,3 @@ If the station feed exceeds the configured freshness limit, forecasts are suppre
 current status remains available if the model is unavailable. A disabled station cannot be
 recommended. Missing weather may use only a documented degraded feature path supported by the
 approved model. The interface must never present a stale forecast as current.
-
