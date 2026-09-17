@@ -71,6 +71,23 @@ the same source state is an idempotent no-op even when ingestion lineage differs
 states for the same identity are rejected. Validation reports retain missing-station, coverage,
 freshness, future-time, and capacity failures instead of filling absent observations.
 
+Import historical source files offline with explicit adapter versions and source lineage:
+
+```bash
+uv run bikeshare import-ridership data/trips.csv \
+  --source-name toronto-open-data \
+  --retrieved-at 2026-09-17T12:00:00Z
+uv run bikeshare import-weather data/weather.csv \
+  --source-name eccc-historical \
+  --retrieved-at 2026-09-17T12:00:00Z
+uv run bikeshare historical-summary ridership
+```
+
+These commands use the `toronto-ridership-v1` and `eccc-hourly-v1` source contracts. They never
+perform network calls. Invalid rows are printed with their source row number and abort the durable
+write; valid imports retain file hash, row number, retrieval time, source schema, and adapter
+version in Parquet. Add a new adapter version rather than silently changing a published mapping.
+
 ## Repository map
 
 - `src/bikeshare_forecast/contracts/`: source and normalized data contracts

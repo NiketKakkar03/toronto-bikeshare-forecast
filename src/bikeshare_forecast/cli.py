@@ -7,8 +7,13 @@ from typing import Annotated
 import typer
 
 from bikeshare_forecast.config import load_collection_config
+from bikeshare_forecast.ingestion import (
+    EcccHourlyV1Adapter,
+    SourceMetadata,
+    TorontoRidershipV1Adapter,
+)
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
-from bikeshare_forecast.storage import DuckDBCatalogue
+from bikeshare_forecast.storage import DuckDBCatalogue, HistoricalStore
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -96,6 +101,74 @@ def data_summary(
     typer.echo(f"source_time_start: {_format_time(summary.first_source_at)}")
     typer.echo(f"source_time_end: {_format_time(summary.last_source_at)}")
     typer.echo(f"duplicate_keys: {summary.duplicate_key_count}")
+
+
+def _metadata(source_name: str, retrieved_at: str) -> SourceMetadata:
+    try:
+        parsed = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise typer.BadParameter("retrieved-at must be an ISO 8601 timestamp") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise typer.BadParameter("retrieved-at must include a UTC offset")
+    return SourceMetadata(source_name=source_name, retrieved_at=parsed)
+
+
+@app.command("import-ridership")
+def import_ridership(
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    source_name: Annotated[str, typer.Option()],
+    retrieved_at: Annotated[str, typer.Option()],
+    output_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
+) -> None:
+    """Validate and persist a local Toronto ridership v1 CSV."""
+    imported = TorontoRidershipV1Adapter().from_path(
+        source, metadata=_metadata(source_name, retrieved_at)
+    )
+    if imported.failures:
+        for failure in imported.failures:
+            typer.echo(f"row {failure.row_number}: {failure.code}: {failure.message}", err=True)
+        raise typer.Exit(code=2)
+    result = HistoricalStore(output_dir).write_trips(imported)
+    typer.echo(f"accepted_rows: {imported.summary.accepted_rows}")
+    typer.echo(f"duplicate_rows: {imported.summary.duplicate_rows + result.duplicates_ignored}")
+    typer.echo(f"rows_written: {result.rows_written}")
+
+
+@app.command("import-weather")
+def import_weather(
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    source_name: Annotated[str, typer.Option()],
+    retrieved_at: Annotated[str, typer.Option()],
+    output_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
+) -> None:
+    """Validate and persist a local ECCC hourly v1 CSV."""
+    imported = EcccHourlyV1Adapter().from_path(
+        source, metadata=_metadata(source_name, retrieved_at)
+    )
+    if imported.failures:
+        for failure in imported.failures:
+            typer.echo(f"row {failure.row_number}: {failure.code}: {failure.message}", err=True)
+        raise typer.Exit(code=2)
+    result = HistoricalStore(output_dir).write_weather(imported)
+    typer.echo(f"accepted_rows: {imported.summary.accepted_rows}")
+    typer.echo(f"duplicate_rows: {imported.summary.duplicate_rows + result.duplicates_ignored}")
+    typer.echo(f"rows_written: {result.rows_written}")
+
+
+@app.command("historical-summary")
+def historical_summary(
+    dataset: Annotated[str, typer.Argument()],
+    data_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
+) -> None:
+    """Print accumulated source-quality summaries for a historical dataset."""
+    if dataset not in {"ridership", "weather"}:
+        raise typer.BadParameter("dataset must be ridership or weather")
+    summaries = HistoricalStore(data_dir).quality_summaries(dataset)
+    typer.echo(f"imports: {len(summaries)}")
+    typer.echo(f"source_rows: {sum(item.total_rows for item in summaries)}")
+    typer.echo(f"accepted_rows: {sum(item.accepted_rows for item in summaries)}")
+    typer.echo(f"rejected_rows: {sum(item.rejected_rows for item in summaries)}")
+    typer.echo(f"duplicate_rows: {sum(item.duplicate_rows for item in summaries)}")
 
 
 if __name__ == "__main__":
