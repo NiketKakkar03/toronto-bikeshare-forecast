@@ -4,11 +4,10 @@ An independent, public-data project for predicting whether a Toronto Bike Share 
 have a rentable bike or an open dock 15, 30, or 60 minutes in the future. The initial product
 focus is the 30-minute horizon and honest probabilities rather than guaranteed inventory.
 
-This repository contains the Milestone 0 contracts plus the storage and validation portion of
-Milestone 1. Validated GBFS models can be captured as immutable, content-addressed JSON; station
-information and status can be normalized with explicit quality reports; and valid snapshots can
-be persisted as append-only Parquet and queried through a DuckDB catalogue. It does not yet run
-live HTTP collection or produce forecasts.
+This repository contains the Milestone 0 contracts plus the collector and storage foundation of
+Milestone 1. The collector discovers advertised GBFS URLs, retries bounded transient failures,
+captures immutable raw JSON, versions station metadata, retains validation/failure reports, and
+writes valid snapshots to append-only Parquet. It does not yet produce forecasts.
 
 GBFS v3 calls rentable bikes and e-bikes `vehicles`. The source contract therefore uses
 `num_vehicles_available`; a later normalization step will map that source terminology into the
@@ -46,6 +45,13 @@ Inspect the feeds advertised by the live GBFS discovery document:
 
 ```bash
 uv run python -m bikeshare_forecast.discovery
+```
+
+Collect one snapshot and report expected-interval coverage:
+
+```bash
+uv run bikeshare ingest-stations --config configs/collection.toml
+uv run bikeshare validate-data --config configs/collection.toml
 ```
 
 The committed tests use only synthetic fixtures and temporary directories and require no network

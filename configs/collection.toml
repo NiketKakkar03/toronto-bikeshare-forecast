@@ -5,6 +5,7 @@ poll_interval_seconds = 300
 freshness_threshold_seconds = 600
 request_timeout_seconds = 15
 max_attempts = 3
+retry_backoff_seconds = 1
 
 [validation]
 toronto_latitude_min = 43.4
@@ -12,4 +13,11 @@ toronto_latitude_max = 44.0
 toronto_longitude_min = -79.8
 toronto_longitude_max = -79.0
 future_timestamp_tolerance_seconds = 60
+capacity_tolerance = 0
+minimum_station_coverage = 1.0
 
+[storage]
+raw_dir = "data/raw/gbfs"
+silver_dir = "data/silver/station_snapshots"
+reports_dir = "data/reports/collection"
+metadata_dir = "data/silver/station_metadata"

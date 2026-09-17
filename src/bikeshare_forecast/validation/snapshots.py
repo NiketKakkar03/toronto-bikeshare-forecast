@@ -24,6 +24,10 @@ class ValidationPolicy(BaseModel):
     future_timestamp_tolerance: timedelta = timedelta(minutes=1)
     capacity_tolerance: int = Field(default=0, ge=0)
     minimum_station_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
+    latitude_min: float = Field(default=43.4, ge=-90, le=90)
+    latitude_max: float = Field(default=44.0, ge=-90, le=90)
+    longitude_min: float = Field(default=-79.8, ge=-180, le=180)
+    longitude_max: float = Field(default=-79.0, ge=-180, le=180)
 
 
 class ValidationIssue(BaseModel):
@@ -143,6 +147,8 @@ def normalize_station_snapshots(
             source_time=state.last_reported,
             ingested_at=ingested_at,
             policy=selected_policy,
+            latitude=info.lat,
+            longitude=info.lon,
         )
         issues.extend(station_issues)
         if station_issues:
@@ -185,9 +191,27 @@ def _station_issues(
     source_time: datetime,
     ingested_at: datetime,
     policy: ValidationPolicy,
+    latitude: float,
+    longitude: float,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     _require_utc(source_time, "source last_reported")
+    if not policy.latitude_min <= latitude <= policy.latitude_max:
+        issues.append(
+            ValidationIssue(
+                code="latitude_out_of_bounds",
+                station_id=station_id,
+                message=f"station {station_id} latitude is outside configured bounds",
+            )
+        )
+    if not policy.longitude_min <= longitude <= policy.longitude_max:
+        issues.append(
+            ValidationIssue(
+                code="longitude_out_of_bounds",
+                station_id=station_id,
+                message=f"station {station_id} longitude is outside configured bounds",
+            )
+        )
     difference = abs(capacity - bikes - docks)
     if difference > policy.capacity_tolerance:
         issues.append(
