@@ -4,10 +4,12 @@ An independent, public-data project for predicting whether a Toronto Bike Share 
 have a rentable bike or an open dock 15, 30, or 60 minutes in the future. The initial product
 focus is the 30-minute horizon and honest probabilities rather than guaranteed inventory.
 
-This repository contains the Milestone 0 contracts plus the collector and storage foundation of
-Milestone 1. The collector discovers advertised GBFS URLs, retries bounded transient failures,
+This repository contains typed source contracts, collector and storage foundations, offline
+historical adapters, a deterministic point-in-time ML pipeline, and a dependency-injected product
+serving slice. The collector discovers advertised GBFS URLs, retries bounded transient failures,
 captures immutable raw JSON, versions station metadata, retains validation/failure reports, and
-writes valid snapshots to append-only Parquet. It does not yet produce forecasts.
+writes valid snapshots to append-only Parquet. The local web service uses deterministic fixture
+forecasts until the trained-model artifacts are connected through its serving provider interface.
 
 GBFS v3 calls rentable bikes and e-bikes `vehicles`. The source contract therefore uses
 `num_vehicles_available`; a later normalization step will map that source terminology into the
@@ -40,6 +42,17 @@ uv run ruff check .
 uv run mypy
 uv run pytest
 ```
+
+Run the offline product demo:
+
+```bash
+uv run uvicorn bikeshare_forecast.serving.app:app --reload
+```
+
+Open `http://127.0.0.1:8000`. The API exposes `/health`, `/api/stations`, current station status,
+and forecasts at 15, 30, and 60 minutes. Forecast responses carry freshness and version metadata,
+uncertainty, empty/full risk, and operational nearby alternatives. Stale data or an unavailable
+forecast provider produces an explicit degraded response while preserving current station status.
 
 Inspect the feeds advertised by the live GBFS discovery document:
 
@@ -93,6 +106,7 @@ version in Parquet. Add a new adapter version rather than silently changing a pu
 - `src/bikeshare_forecast/contracts/`: source and normalized data contracts
 - `src/bikeshare_forecast/storage/`: immutable JSON, Parquet, and DuckDB catalogue interfaces
 - `src/bikeshare_forecast/validation/`: GBFS normalization and quality reporting
+- `src/bikeshare_forecast/serving/`: provider boundary, FastAPI service, and small web client
 - `tests/`: unit and contract tests
 - `configs/collection.toml`: initial collection and freshness policy
 - `data/fixtures/gbfs/`: small synthetic GBFS v3 responses
