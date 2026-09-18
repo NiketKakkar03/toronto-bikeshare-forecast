@@ -125,15 +125,17 @@ def test_collector_persists_raw_metadata_report_and_silver(tmp_path: Path) -> No
     assert len(CollectionReportStore(tmp_path / "reports").reports()) == 2
 
 
-def test_collector_retains_validation_failure_without_silver_write(tmp_path: Path) -> None:
+def test_collector_retains_capacity_warning_and_writes_snapshot(tmp_path: Path) -> None:
     with httpx.Client(transport=transport(invalid_status=True)) as client:
         report = StationCollector(
             config(tmp_path), client=client, sleep=lambda _: None, clock=lambda: NOW
         ).collect_once()
 
-    assert report.outcome == "validation_failed"
+    assert report.outcome == "success"
     assert {issue.code for issue in report.issues} == {"capacity_mismatch"}
-    assert not (tmp_path / "silver").exists()
+    assert {issue.severity for issue in report.issues} == {"warning"}
+    assert report.rows_written == 1
+    assert (tmp_path / "silver").exists()
     assert CollectionReportStore(tmp_path / "reports").reports() == (report,)
 
 

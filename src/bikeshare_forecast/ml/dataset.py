@@ -109,8 +109,14 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
                     complete = False
                     break
                 target_bikes = int(values[target_index]["bikes_available"])
+                target_docks = int(values[target_index]["docks_available"])
                 features[f"target_time_{horizon}m"] = times[target_index]
                 features[f"target_bikes_{horizon}m"] = target_bikes
+                features[f"target_docks_{horizon}m"] = target_docks
+                features[f"target_empty_{horizon}m"] = int(
+                    target_bikes <= policy.unavailable_bikes_threshold
+                )
+                features[f"target_full_{horizon}m"] = int(target_docks == 0)
                 features[f"target_unavailable_{horizon}m"] = int(
                     target_bikes <= policy.unavailable_bikes_threshold
                 )

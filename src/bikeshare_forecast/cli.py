@@ -12,8 +12,8 @@ from bikeshare_forecast.ingestion import (
     SourceMetadata,
     TorontoRidershipV1Adapter,
 )
-from bikeshare_forecast.operations import CollectionReportStore, StationCollector
 from bikeshare_forecast.ml import DatasetConfig, build_dataset, evaluate_run, train_models
+from bikeshare_forecast.operations import CollectionReportStore, StationCollector
 from bikeshare_forecast.storage import DuckDBCatalogue, HistoricalStore
 
 app = typer.Typer(no_args_is_help=True)

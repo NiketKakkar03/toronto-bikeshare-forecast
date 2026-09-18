@@ -8,8 +8,9 @@ This repository contains typed source contracts, collector and storage foundatio
 historical adapters, a deterministic point-in-time ML pipeline, and a dependency-injected product
 serving slice. The collector discovers advertised GBFS URLs, retries bounded transient failures,
 captures immutable raw JSON, versions station metadata, retains validation/failure reports, and
-writes valid snapshots to append-only Parquet. The local web service uses deterministic fixture
-forecasts until the trained-model artifacts are connected through its serving provider interface.
+writes valid snapshots to append-only Parquet. The serving boundary supports both deterministic
+fixture forecasts and an artifact-backed provider that verifies model hashes and scores the latest
+silver station snapshots.
 
 GBFS v3 calls rentable bikes and e-bikes `vehicles`. The source contract therefore uses
 `num_vehicles_available`; a later normalization step will map that source terminology into the
@@ -82,7 +83,10 @@ uv run bikeshare data-summary \
 The snapshot identity is `(station_id, source_last_reported_at, source_system_id)`. Recollecting
 the same source state is an idempotent no-op even when ingestion lineage differs; conflicting
 states for the same identity are rejected. Validation reports retain missing-station, coverage,
-freshness, future-time, and capacity failures instead of filling absent observations.
+freshness, future-time, and capacity failures instead of filling absent observations. Capacity
+accounting includes available and disabled bikes and docks; residual source inconsistencies are
+retained as warnings, while stale or otherwise invalid station rows are omitted without discarding
+the rest of a healthy city-wide snapshot.
 
 Import historical source files offline with explicit adapter versions and source lineage:
 
@@ -100,6 +104,19 @@ These commands use the `toronto-ridership-v1` and `eccc-hourly-v1` source contra
 perform network calls. Invalid rows are printed with their source row number and abort the durable
 write; valid imports retain file hash, row number, retrieval time, source schema, and adapter
 version in Parquet. Add a new adapter version rather than silently changing a published mapping.
+
+Build the point-in-time dataset, train separate empty/full classifiers, and evaluate the held-out
+chronological test split:
+
+```bash
+uv run bikeshare dataset-build --silver-dir data/silver/station_snapshots
+uv run bikeshare train
+uv run bikeshare evaluate
+```
+
+The resulting manifest records SHA-256 hashes for every model. `ArtifactForecastProvider`
+verifies those hashes before serving 15, 30, or 60-minute empty/full risk estimates over the
+latest persisted station state.
 
 ## Repository map
 

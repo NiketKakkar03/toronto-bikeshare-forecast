@@ -8,6 +8,7 @@ from bikeshare_forecast.cli import app
 from bikeshare_forecast.contracts import StationSnapshot
 from bikeshare_forecast.ml import build_dataset, evaluate_run, train_models
 from bikeshare_forecast.ml.common import read_json
+from bikeshare_forecast.serving import ArtifactForecastProvider
 from bikeshare_forecast.storage import SilverStore
 
 
@@ -71,8 +72,21 @@ def test_pipeline_is_deterministic_point_in_time_and_persists_artifacts(tmp_path
     report = read_json(evaluate_run(first, models, report_dir))
     assert report["rows"] > 0
     assert set(report["metrics"]) == {"15m", "30m", "60m"}
-    assert "roc_auc" in report["metrics"]["15m"]["classification"]["logistic"]
+    assert "roc_auc" in report["metrics"]["15m"]["classification"]["empty"]["logistic"]
+    assert "roc_auc" in report["metrics"]["15m"]["classification"]["full"]["logistic"]
     assert "rmse" in report["metrics"]["60m"]["inventory_regression"]["persistence"]
+
+    latest = max(item.source_last_reported_at for item in _fixtures())
+    provider = ArtifactForecastProvider(
+        silver,
+        models,
+        clock=lambda: latest + timedelta(seconds=10),
+    )
+    forecast = provider.forecast("7001", 30)
+    assert forecast.forecast is not None
+    assert 0 <= forecast.forecast.empty_risk <= 1
+    assert 0 <= forecast.forecast.full_risk <= 1
+    assert forecast.model_version is not None
 
 
 def test_pipeline_cli_commands(tmp_path: Path) -> None:

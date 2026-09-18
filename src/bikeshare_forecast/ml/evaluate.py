@@ -13,7 +13,8 @@ import polars as pl
 from bikeshare_forecast.ml.common import read_json, sha256_file, write_json
 
 
-def _probability(model: dict[str, Any], row: dict[str, object]) -> float:
+def predict_probability(model: dict[str, Any], row: dict[str, object]) -> float:
+    """Apply a persisted deterministic logistic model to one feature row."""
     values = []
     for index, column in enumerate(model["feature_columns"]):
         raw = row[column]
@@ -97,13 +98,7 @@ def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
     model_hashes: list[dict[str, str]] = []
     for horizon_value in dataset_manifest["config"]["horizons_minutes"]:
         horizon = int(horizon_value)
-        model_path = model_dir / f"logistic-{horizon}m.json"
-        model = read_json(model_path)
-        if model["dataset_sha256"] != dataset_manifest["dataset_sha256"]:
-            raise ValueError("model was trained from a different dataset")
         rows = test.to_dicts()
-        labels = [int(row[f"target_unavailable_{horizon}m"]) for row in rows]
-        probabilities = [_probability(model, row) for row in rows]
         actual = [float(row[f"target_bikes_{horizon}m"]) for row in rows]
         persistence = [float(row["bikes_available"]) for row in rows]
         seasonal = [
@@ -113,14 +108,23 @@ def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
             )
             for row in rows
         ]
+        classification: dict[str, object] = {}
+        for risk in ("empty", "full"):
+            model_path = model_dir / f"logistic-{risk}-{horizon}m.json"
+            model = read_json(model_path)
+            if model["dataset_sha256"] != dataset_manifest["dataset_sha256"]:
+                raise ValueError("model was trained from a different dataset")
+            labels = [int(row[f"target_{risk}_{horizon}m"]) for row in rows]
+            probabilities = [predict_probability(model, row) for row in rows]
+            classification[risk] = {"logistic": _classification(labels, probabilities)}
+            model_hashes.append({"path": model_path.name, "sha256": sha256_file(model_path)})
         results[f"{horizon}m"] = {
-            "classification": {"logistic": _classification(labels, probabilities)},
+            "classification": classification,
             "inventory_regression": {
                 "persistence": _regression(actual, persistence),
                 "seasonal_7d": _regression(actual, seasonal),
             },
         }
-        model_hashes.append({"path": model_path.name, "sha256": sha256_file(model_path)})
     report = {
         "schema_version": 1,
         "evaluation_split": "test",

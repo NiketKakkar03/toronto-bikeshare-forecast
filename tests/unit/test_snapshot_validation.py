@@ -62,7 +62,9 @@ def test_normalizes_fixture_and_keeps_event_and_ingestion_time_distinct() -> Non
         ),
     ],
 )
-def test_rejects_invalid_station_without_filling_it(change: dict[str, object], code: str) -> None:
+def test_retains_station_issue_without_filling_invalid_time(
+    change: dict[str, object], code: str
+) -> None:
     information, status = fixtures()
     changed_status = status.model_copy(
         update={
@@ -74,10 +76,34 @@ def test_rejects_invalid_station_without_filling_it(change: dict[str, object], c
 
     report = normalize(information, changed_status)
 
-    assert report.snapshots == ()
     assert code in {issue.code for issue in report.issues}
-    with pytest.raises(SnapshotValidationError):
-        report.raise_for_errors()
+    assert all(issue.severity == "warning" for issue in report.issues)
+    if code == "future_source_timestamp":
+        assert report.snapshots == ()
+    else:
+        assert len(report.snapshots) == 1
+    report.raise_for_errors()
+
+
+def test_disabled_inventory_is_included_in_capacity_accounting() -> None:
+    information, status = fixtures()
+    changed = status.data.stations[0].model_copy(
+        update={
+            "num_vehicles_available": 3,
+            "num_vehicles_disabled": 1,
+            "num_docks_available": 10,
+            "num_docks_disabled": 1,
+        }
+    )
+    updated = status.model_copy(
+        update={"data": status.data.model_copy(update={"stations": [changed]})}
+    )
+
+    report = normalize(information, updated)
+
+    assert report.is_valid
+    assert report.issues == ()
+    assert len(report.snapshots) == 1
 
 
 def test_reports_staleness_and_missing_station_coverage() -> None:
@@ -92,11 +118,15 @@ def test_reports_staleness_and_missing_station_coverage() -> None:
     uncovered = normalize(information, missing)
 
     assert {issue.code for issue in stale.issues} == {"stale_snapshot"}
+    assert stale.snapshots == ()
+    assert stale.is_valid
     assert uncovered.coverage == 0.0
     assert {issue.code for issue in uncovered.issues} == {
         "missing_status",
         "coverage_below_threshold",
     }
+    with pytest.raises(SnapshotValidationError):
+        uncovered.raise_for_errors()
 
 
 def test_rejects_duplicate_source_records() -> None:

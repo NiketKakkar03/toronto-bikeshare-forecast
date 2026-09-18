@@ -1,6 +1,15 @@
 """Forecast-serving interfaces and application factory."""
 
 from bikeshare_forecast.serving.app import create_app
-from bikeshare_forecast.serving.providers import FixtureForecastProvider, ForecastProvider
+from bikeshare_forecast.serving.providers import (
+    ArtifactForecastProvider,
+    FixtureForecastProvider,
+    ForecastProvider,
+)
 
-__all__ = ["FixtureForecastProvider", "ForecastProvider", "create_app"]
+__all__ = [
+    "ArtifactForecastProvider",
+    "FixtureForecastProvider",
+    "ForecastProvider",
+    "create_app",
+]

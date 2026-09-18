@@ -220,6 +220,7 @@ class StationCollector:
                     duplicates_ignored=written.duplicates_ignored,
                     metadata_versions_written=metadata.versions_written,
                     metadata_changes=len(metadata.changes),
+                    issues=validation.issues,
                 )
         except Exception as error:
             report = CollectionReport(
