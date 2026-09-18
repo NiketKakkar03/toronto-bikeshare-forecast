@@ -4,12 +4,13 @@ An independent, public-data project for predicting whether a Toronto Bike Share 
 have a rentable bike or an open dock 15, 30, or 60 minutes in the future. The initial product
 focus is the 30-minute horizon and honest probabilities rather than guaranteed inventory.
 
-This repository contains the data foundation and reproducible offline baseline workflow. A
-one-shot command discovers and collects live GBFS station feeds, captures immutable raw JSON,
-validates and persists normalized Parquet snapshots, and prevents duplicate observations. The
-offline ML commands build point-in-time datasets, train deterministic empty/full logistic
-baselines, evaluate bike/dock persistence and seasonal baselines, and run expanding-window
-backtests. It does not yet provide a deployed forecast API or public interface.
+This repository contains typed source contracts, collector and storage foundations, offline
+historical adapters, a deterministic point-in-time ML pipeline, and a dependency-injected product
+serving slice. The collector discovers advertised GBFS URLs, retries bounded transient failures,
+captures immutable raw JSON, versions station metadata, retains validation/failure reports, and
+writes valid snapshots to append-only Parquet. The serving boundary supports both deterministic
+fixture forecasts and an artifact-backed provider that verifies model hashes and scores the latest
+silver station snapshots.
 
 GBFS v3 calls rentable bikes and e-bikes `vehicles`. The source contract therefore uses
 `num_vehicles_available`; a later normalization step will map that source terminology into the
@@ -43,10 +44,28 @@ uv run mypy
 uv run pytest
 ```
 
+Run the offline product demo:
+
+```bash
+uv run uvicorn bikeshare_forecast.serving.app:app --reload
+```
+
+Open `http://127.0.0.1:8000`. The API exposes `/health`, `/api/stations`, current station status,
+and forecasts at 15, 30, and 60 minutes. Forecast responses carry freshness and version metadata,
+uncertainty, empty/full risk, and operational nearby alternatives. Stale data or an unavailable
+forecast provider produces an explicit degraded response while preserving current station status.
+
 Inspect the feeds advertised by the live GBFS discovery document:
 
 ```bash
 uv run python -m bikeshare_forecast.discovery
+```
+
+Collect one snapshot and report expected-interval coverage:
+
+```bash
+uv run bikeshare ingest-stations --config configs/collection.toml
+uv run bikeshare validate-data --config configs/collection.toml
 ```
 
 The committed tests use only synthetic fixtures and temporary directories and require no network
@@ -61,35 +80,52 @@ uv run bikeshare data-summary \
   --catalogue data/catalogue.duckdb
 ```
 
-Collect one live snapshot (scheduling remains an operator responsibility):
-
-```bash
-uv run bikeshare ingest-stations
-```
-
-Build and evaluate the offline baselines:
-
-```bash
-uv run bikeshare dataset-build
-uv run bikeshare train
-uv run bikeshare evaluate
-uv run bikeshare backtest
-```
-
 The snapshot identity is `(station_id, source_last_reported_at, source_system_id)`. Recollecting
 the same source state is an idempotent no-op even when ingestion lineage differs; conflicting
 states for the same identity are rejected. Validation reports retain missing-station, coverage,
-freshness, future-time, and capacity failures instead of filling absent observations.
+freshness, future-time, and capacity failures instead of filling absent observations. Capacity
+accounting includes available and disabled bikes and docks; residual source inconsistencies are
+retained as warnings, while stale or otherwise invalid station rows are omitted without discarding
+the rest of a healthy city-wide snapshot.
+
+Import historical source files offline with explicit adapter versions and source lineage:
+
+```bash
+uv run bikeshare import-ridership data/trips.csv \
+  --source-name toronto-open-data \
+  --retrieved-at 2026-09-17T12:00:00Z
+uv run bikeshare import-weather data/weather.csv \
+  --source-name eccc-historical \
+  --retrieved-at 2026-09-17T12:00:00Z
+uv run bikeshare historical-summary ridership
+```
+
+These commands use the `toronto-ridership-v1` and `eccc-hourly-v1` source contracts. They never
+perform network calls. Invalid rows are printed with their source row number and abort the durable
+write; valid imports retain file hash, row number, retrieval time, source schema, and adapter
+version in Parquet. Add a new adapter version rather than silently changing a published mapping.
+
+Build the point-in-time dataset, train separate empty/full classifiers, and evaluate the held-out
+chronological test split:
+
+```bash
+uv run bikeshare dataset-build --silver-dir data/silver/station_snapshots
+uv run bikeshare train
+uv run bikeshare evaluate
+```
+
+The resulting manifest records SHA-256 hashes for every model. `ArtifactForecastProvider`
+verifies those hashes before serving 15, 30, or 60-minute empty/full risk estimates over the
+latest persisted station state.
 
 ## Repository map
 
 - `src/bikeshare_forecast/contracts/`: source and normalized data contracts
 - `src/bikeshare_forecast/storage/`: immutable JSON, Parquet, and DuckDB catalogue interfaces
 - `src/bikeshare_forecast/validation/`: GBFS normalization and quality reporting
-- `src/bikeshare_forecast/ml/`: point-in-time datasets, baselines, evaluation, and backtesting
+- `src/bikeshare_forecast/serving/`: provider boundary, FastAPI service, and small web client
 - `tests/`: unit and contract tests
 - `configs/collection.toml`: initial collection and freshness policy
-- `configs/training.toml`: dataset split, label, and backtest policy
 - `data/fixtures/gbfs/`: small synthetic GBFS v3 responses
 - `docs/prediction-contract.md`: forecast-time and label semantics
 - `docs/data-sources.md`: licences, attribution, and source boundaries

@@ -12,8 +12,8 @@ class StationSnapshot(BaseModel):
 
     station_id: str = Field(min_length=1)
     station_name: str = Field(min_length=1)
-    latitude: float = Field(ge=43.4, le=44.0)
-    longitude: float = Field(ge=-79.8, le=-79.0)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
     capacity: int = Field(ge=0)
     bikes_available: int = Field(ge=0)
     docks_available: int = Field(ge=0)

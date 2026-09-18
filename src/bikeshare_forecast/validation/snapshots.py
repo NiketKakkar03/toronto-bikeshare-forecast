@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,16 +25,21 @@ class ValidationPolicy(BaseModel):
     future_timestamp_tolerance: timedelta = timedelta(minutes=1)
     capacity_tolerance: int = Field(default=0, ge=0)
     minimum_station_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
+    latitude_min: float = Field(default=43.4, ge=-90, le=90)
+    latitude_max: float = Field(default=44.0, ge=-90, le=90)
+    longitude_min: float = Field(default=-79.8, ge=-180, le=180)
+    longitude_max: float = Field(default=-79.0, ge=-180, le=180)
 
 
 class ValidationIssue(BaseModel):
-    """A retained reason why a source observation was not normalized."""
+    """A retained warning or error discovered while normalizing source data."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     code: str
     message: str
     station_id: str | None = None
+    severity: Literal["warning", "error"] = "error"
 
 
 class ValidationReport(BaseModel):
@@ -49,10 +55,10 @@ class ValidationReport(BaseModel):
 
     @property
     def is_valid(self) -> bool:
-        return not self.issues
+        return not any(issue.severity == "error" for issue in self.issues)
 
     def raise_for_errors(self) -> None:
-        if self.issues:
+        if not self.is_valid:
             raise SnapshotValidationError(self)
 
 
@@ -139,13 +145,17 @@ def normalize_station_snapshots(
             station_id,
             capacity=info.capacity,
             bikes=state.num_vehicles_available,
+            bikes_disabled=state.num_vehicles_disabled,
             docks=state.num_docks_available,
+            docks_disabled=state.num_docks_disabled,
             source_time=state.last_reported,
             ingested_at=ingested_at,
             policy=selected_policy,
+            latitude=info.lat,
+            longitude=info.lon,
         )
         issues.extend(station_issues)
-        if station_issues:
+        if any(issue.code != "capacity_mismatch" for issue in station_issues):
             continue
         snapshots.append(
             StationSnapshot(
@@ -181,22 +191,46 @@ def _station_issues(
     *,
     capacity: int,
     bikes: int,
+    bikes_disabled: int,
     docks: int,
+    docks_disabled: int,
     source_time: datetime,
     ingested_at: datetime,
     policy: ValidationPolicy,
+    latitude: float,
+    longitude: float,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     _require_utc(source_time, "source last_reported")
-    difference = abs(capacity - bikes - docks)
+    if not policy.latitude_min <= latitude <= policy.latitude_max:
+        issues.append(
+            ValidationIssue(
+                code="latitude_out_of_bounds",
+                station_id=station_id,
+                severity="warning",
+                message=f"station {station_id} latitude is outside configured bounds",
+            )
+        )
+    if not policy.longitude_min <= longitude <= policy.longitude_max:
+        issues.append(
+            ValidationIssue(
+                code="longitude_out_of_bounds",
+                station_id=station_id,
+                severity="warning",
+                message=f"station {station_id} longitude is outside configured bounds",
+            )
+        )
+    accounted_inventory = bikes + bikes_disabled + docks + docks_disabled
+    difference = abs(capacity - accounted_inventory)
     if difference > policy.capacity_tolerance:
         issues.append(
             ValidationIssue(
                 code="capacity_mismatch",
                 station_id=station_id,
+                severity="warning",
                 message=(
-                    f"station {station_id} inventory differs from capacity by {difference} "
-                    f"(tolerance {policy.capacity_tolerance})"
+                    f"station {station_id} available and disabled inventory differs from "
+                    f"capacity by {difference} (tolerance {policy.capacity_tolerance})"
                 ),
             )
         )
@@ -205,6 +239,7 @@ def _station_issues(
             ValidationIssue(
                 code="future_source_timestamp",
                 station_id=station_id,
+                severity="warning",
                 message=f"station {station_id} source timestamp is implausibly in the future",
             )
         )
@@ -214,6 +249,7 @@ def _station_issues(
             ValidationIssue(
                 code="stale_snapshot",
                 station_id=station_id,
+                severity="warning",
                 message=f"station {station_id} snapshot age {age} exceeds freshness threshold",
             )
         )

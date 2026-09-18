@@ -13,7 +13,8 @@ import polars as pl
 from bikeshare_forecast.ml.common import read_json, sha256_file, write_json
 
 
-def _probability(model: dict[str, Any], row: dict[str, object]) -> float:
+def predict_probability(model: dict[str, Any], row: dict[str, object]) -> float:
+    """Apply a persisted deterministic logistic model to one feature row."""
     values = []
     for index, column in enumerate(model["feature_columns"]):
         raw = row[column]
@@ -172,7 +173,7 @@ def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
             if model["dataset_sha256"] != dataset_manifest["dataset_sha256"]:
                 raise ValueError("model was trained from a different dataset")
             labels = [int(row[label_column]) for row in rows]
-            probabilities = [_probability(model, row) for row in rows]
+            probabilities = [predict_probability(model, row) for row in rows]
             persistence_probabilities = [float(int(row[current_column] == 0)) for row in rows]
             classifications[target] = {
                 "logistic": _classification(labels, probabilities),

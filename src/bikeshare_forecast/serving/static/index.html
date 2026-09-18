@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toronto Bike Share Forecast</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <header>
+      <p class="eyebrow">TORONTO BIKE SHARE</p>
+      <h1>Will there be a bike when you arrive?</h1>
+      <p class="lede">Short-horizon station forecasts with uncertainty shown plainly.</p>
+    </header>
+    <main>
+      <section class="controls" aria-label="Forecast controls">
+        <label for="search">Find a station</label>
+        <input id="search" type="search" placeholder="Name or station ID" autocomplete="off" />
+        <div id="stations" class="station-list" role="listbox" aria-label="Stations"></div>
+      </section>
+      <section id="detail" class="detail" aria-live="polite">
+        <p class="empty-state">Choose a station to see its outlook.</p>
+      </section>
+    </main>
+    <footer>
+      <p>Predictions are estimates, not guarantees. Not affiliated with Bike Share Toronto.</p>
+    </footer>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
