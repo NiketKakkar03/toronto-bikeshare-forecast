@@ -1,9 +1,9 @@
-"""Point-in-time dataset construction from normalized station values only."""
+"""Point-in-time station-demand dataset construction from historical trips."""
 
 from __future__ import annotations
 
-import tomllib
-from bisect import bisect_left
+import math
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,143 +14,104 @@ from bikeshare_forecast.ml.common import sha256_file, write_json
 
 HORIZONS_MINUTES = (15, 30, 60)
 FEATURE_COLUMNS = (
-    "bikes_available",
-    "docks_available",
-    "capacity",
-    "bike_fraction",
     "minute_sin",
     "minute_cos",
     "weekday_sin",
     "weekday_cos",
-    "bikes_lag_15m",
-    "bikes_lag_60m",
+    "departures_lag_15m",
+    "arrivals_lag_15m",
+    "departures_lag_60m",
+    "arrivals_lag_60m",
 )
 
 
 @dataclass(frozen=True)
 class DatasetConfig:
-    """Label matching and chronological split policy."""
+    """Demand windows and chronological split policy."""
 
     horizons_minutes: tuple[int, ...] = HORIZONS_MINUTES
-    target_tolerance_minutes: int = 3
-    unavailable_bikes_threshold: int = 0
-    unavailable_docks_threshold: int = 0
-    train_fraction: float = 0.7
-    validation_fraction: float = 0.15
-
-    @classmethod
-    def from_toml(cls, path: Path) -> DatasetConfig:
-        """Load the versioned dataset policy from a TOML file."""
-        with path.open("rb") as handle:
-            values = tomllib.load(handle)["dataset"]
-        return cls(
-            horizons_minutes=tuple(int(value) for value in values["horizons_minutes"]),
-            target_tolerance_minutes=int(values["target_tolerance_minutes"]),
-            unavailable_bikes_threshold=int(values["unavailable_bikes_threshold"]),
-            unavailable_docks_threshold=int(values["unavailable_docks_threshold"]),
-            train_fraction=float(values["train_fraction"]),
-            validation_fraction=float(values["validation_fraction"]),
-        )
+    interval_minutes: int = 15
+    train_fraction: float = 0.6
+    validation_fraction: float = 0.2
 
 
-def _nearest_index(times: list[datetime], target: datetime, tolerance: timedelta) -> int | None:
-    insertion = bisect_left(times, target)
-    candidates = [index for index in (insertion - 1, insertion) if 0 <= index < len(times)]
-    if not candidates:
-        return None
-    # Earlier timestamp wins an exact tie, making matching stable and documented.
-    match = min(candidates, key=lambda index: (abs(times[index] - target), times[index]))
-    return match if abs(times[match] - target) <= tolerance else None
-
-
-def _snapshot_files(root: Path) -> list[Path]:
-    files = sorted(root.glob("*.parquet"))
+def _trip_files(root: Path) -> list[Path]:
+    directory = root / "ridership" / "parquet"
+    files = sorted(directory.glob("*.parquet"))
     if not files:
-        raise ValueError(f"no normalized snapshot parquet files found in {root}")
+        raise ValueError(f"no historical ridership parquet files found in {directory}")
     return files
 
 
-def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | None = None) -> Path:
-    """Build features using values available at or before each feature timestamp."""
+def _bucket(value: datetime, minutes: int) -> datetime:
+    return value.replace(minute=(value.minute // minutes) * minutes, second=0, microsecond=0)
+
+
+def build_dataset(
+    historical_dir: Path, output_dir: Path, config: DatasetConfig | None = None
+) -> Path:
+    """Build demand features and future trip-count targets without future leakage."""
     policy = config or DatasetConfig()
+    if policy.interval_minutes <= 0 or any(
+        h % policy.interval_minutes for h in policy.horizons_minutes
+    ):
+        raise ValueError("interval must be positive and divide every horizon")
     if not 0 < policy.train_fraction < 1 or not 0 < policy.validation_fraction < 1:
         raise ValueError("split fractions must be between zero and one")
     if policy.train_fraction + policy.validation_fraction >= 1:
-        raise ValueError("train and validation fractions must leave a test partition")
-
-    source_files = _snapshot_files(silver_dir)
-    frame = pl.concat([pl.read_parquet(path) for path in source_files]).sort(
-        ["station_id", "ingested_at", "source_last_reported_at"]
-    )
+        raise ValueError("split fractions must leave a test partition")
+    source_files = _trip_files(historical_dir)
+    trips = pl.concat([pl.read_parquet(path) for path in source_files])
+    counts: dict[tuple[str, datetime], list[int]] = defaultdict(lambda: [0, 0])
+    names: dict[str, str] = {}
+    for trip in trips.to_dicts():
+        started, ended = trip["started_at"], trip["ended_at"]
+        if not isinstance(started, datetime) or not isinstance(ended, datetime):
+            raise ValueError("historical trip timestamps must be datetimes")
+        start_id, end_id = str(trip["start_station_id"]), str(trip["end_station_id"])
+        counts[(start_id, _bucket(started, policy.interval_minutes))][0] += 1
+        counts[(end_id, _bucket(ended, policy.interval_minutes))][1] += 1
+        names[start_id] = str(trip.get("start_station_name") or start_id)
+        names[end_id] = str(trip.get("end_station_name") or end_id)
+    times = [time for _, time in counts]
+    first, last = min(times), max(times)
+    step = timedelta(minutes=policy.interval_minutes)
     rows: list[dict[str, object]] = []
-    tolerance = timedelta(minutes=policy.target_tolerance_minutes)
-    for station in frame.partition_by("station_id", maintain_order=True):
-        values = station.to_dicts()
-        targets = sorted(values, key=lambda value: value["source_last_reported_at"])
-        target_times = [value["source_last_reported_at"] for value in targets]
-        assert all(isinstance(value, datetime) for value in target_times)
-        for current in values:
-            now = current["ingested_at"]
-            if not isinstance(now, datetime):
-                raise ValueError("ingested_at must be a datetime")
-            history = [
-                value
-                for value in targets
-                if value["ingested_at"] <= now and value["source_last_reported_at"] <= now
-            ]
-            history_times = [value["source_last_reported_at"] for value in history]
-            lag_15 = _nearest_index(history_times, now - timedelta(minutes=15), tolerance)
-            lag_60 = _nearest_index(history_times, now - timedelta(minutes=60), tolerance)
-            minute = now.hour * 60 + now.minute
-            weekday = now.weekday()
-            import math
-
-            features: dict[str, object] = {
-                "station_id": current["station_id"],
-                "feature_time": now,
-                "bikes_available": current["bikes_available"],
-                "docks_available": current["docks_available"],
-                "capacity": current["capacity"],
-                "bike_fraction": (
-                    float(current["bikes_available"]) / float(current["capacity"])
-                    if current["capacity"]
-                    else 0.0
-                ),
+    for station_id in sorted(names):
+        current = first + timedelta(hours=1)
+        while current + timedelta(minutes=max(policy.horizons_minutes)) <= last + step:
+            minute, weekday = current.hour * 60 + current.minute, current.weekday()
+            row: dict[str, object] = {
+                "station_id": station_id,
+                "station_name": names[station_id],
+                "feature_time": current,
                 "minute_sin": math.sin(2 * math.pi * minute / 1440),
                 "minute_cos": math.cos(2 * math.pi * minute / 1440),
                 "weekday_sin": math.sin(2 * math.pi * weekday / 7),
                 "weekday_cos": math.cos(2 * math.pi * weekday / 7),
-                "bikes_lag_15m": (
-                    float(history[lag_15]["bikes_available"]) if lag_15 is not None else None
-                ),
-                "bikes_lag_60m": (
-                    float(history[lag_60]["bikes_available"]) if lag_60 is not None else None
-                ),
+                "departures_lag_15m": counts[(station_id, current - step)][0],
+                "arrivals_lag_15m": counts[(station_id, current - step)][1],
+                "departures_lag_60m": counts[(station_id, current - timedelta(hours=1))][0],
+                "arrivals_lag_60m": counts[(station_id, current - timedelta(hours=1))][1],
             }
-            complete = True
             for horizon in policy.horizons_minutes:
-                target_index = _nearest_index(
-                    target_times, now + timedelta(minutes=horizon), tolerance
+                interval_count = horizon // policy.interval_minutes
+                departures = sum(
+                    counts[(station_id, current + offset * step)][0]
+                    for offset in range(interval_count)
                 )
-                if target_index is None or target_times[target_index] <= now:
-                    complete = False
-                    break
-                target_bikes = int(targets[target_index]["bikes_available"])
-                features[f"target_time_{horizon}m"] = target_times[target_index]
-                features[f"target_bikes_{horizon}m"] = target_bikes
-                features[f"target_unavailable_{horizon}m"] = int(
-                    target_bikes <= policy.unavailable_bikes_threshold
+                arrivals = sum(
+                    counts[(station_id, current + offset * step)][1]
+                    for offset in range(interval_count)
                 )
-                target_docks = int(targets[target_index]["docks_available"])
-                features[f"target_docks_{horizon}m"] = target_docks
-                features[f"target_full_{horizon}m"] = int(
-                    target_docks <= policy.unavailable_docks_threshold
-                )
-            if complete:
-                rows.append(features)
+                row[f"target_time_{horizon}m"] = current + timedelta(minutes=horizon)
+                row[f"target_departures_{horizon}m"] = departures
+                row[f"target_arrivals_{horizon}m"] = arrivals
+                row[f"target_net_flow_{horizon}m"] = arrivals - departures
+            rows.append(row)
+            current += step
     if not rows:
-        raise ValueError("no rows have complete horizon targets under the configured tolerance")
-
+        raise ValueError("historical ridership does not span enough time for demand targets")
     result = pl.DataFrame(rows).sort(["feature_time", "station_id"])
     unique_times = sorted(result["feature_time"].unique().to_list())
     train_end = max(1, int(len(unique_times) * policy.train_fraction))
@@ -158,15 +119,11 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
         train_end + 1, int(len(unique_times) * (policy.train_fraction + policy.validation_fraction))
     )
     if validation_end >= len(unique_times):
-        raise ValueError(
-            "at least three distinct feature timestamps are required for temporal splits"
-        )
-    train_cutoff = unique_times[train_end]
-    validation_cutoff = unique_times[validation_end]
+        raise ValueError("at least three distinct feature timestamps are required")
     result = result.with_columns(
-        pl.when(pl.col("feature_time") < train_cutoff)
+        pl.when(pl.col("feature_time") < unique_times[train_end])
         .then(pl.lit("train"))
-        .when(pl.col("feature_time") < validation_cutoff)
+        .when(pl.col("feature_time") < unique_times[validation_end])
         .then(pl.lit("validation"))
         .otherwise(pl.lit("test"))
         .alias("split")
@@ -175,27 +132,20 @@ def build_dataset(silver_dir: Path, output_dir: Path, config: DatasetConfig | No
     dataset_path = output_dir / "dataset.parquet"
     result.write_parquet(dataset_path, compression="zstd")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "forecast_kind": "station_demand",
         "config": asdict(policy),
         "feature_columns": list(FEATURE_COLUMNS),
+        "targets": ["departures", "arrivals", "net_flow"],
         "row_count": result.height,
         "split_counts": {
             row["split"]: row["len"] for row in result.group_by("split").len().to_dicts()
         },
         "source_files": [{"path": str(path), "sha256": sha256_file(path)} for path in source_files],
         "dataset_sha256": sha256_file(dataset_path),
-        "point_in_time_rule": (
-            "feature_time is ingested_at; current and lag values require ingested_at and "
-            "source_last_reported_at no later than feature_time"
-        ),
-        "target_rule": (
-            "nearest observation to feature_time + horizon within inclusive tolerance; "
-            "earlier observation wins ties; target time must be after feature time"
-        ),
-        "split_rule": (
-            "global feature timestamps are assigned chronologically using the configured "
-            "train and validation fractions; the remainder is test"
-        ),
+        "point_in_time_rule": "features use only trip events before feature_time",
+        "target_rule": "counts trips in [feature_time, feature_time + horizon)",
+        "split_rule": "global feature timestamps are assigned chronologically 60%/20%/20%",
     }
     write_json(output_dir / "dataset-manifest.json", manifest)
     return dataset_path

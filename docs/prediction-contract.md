@@ -1,44 +1,18 @@
-# Prediction contract
+# Station-demand prediction contract
 
-## Unit and time semantics
+One prediction describes one station, one forecast creation time, and one horizon (15, 30, or 60 minutes).
 
-One prediction describes one station, one forecast creation time, and one horizon. Persisted
-timestamps are timezone-aware UTC timestamps. User-facing Toronto times must be converted with
-the `America/Toronto` IANA timezone, including daylight-saving transitions.
+## Targets
 
-The initial supported horizons are 15, 30, and 60 minutes. End-to-end development and evaluation
-start with 30 minutes. For a forecast created at time `t`, `target_time = t + horizon`.
+- `departures`: trips starting during `[forecast_created_at, target_time)`
+- `arrivals`: trips ending during the same interval
+- `net_flow`: arrivals minus departures
+- `demand_pressure`: low, moderate, or high based on predicted net flow
 
-Every input must have an availability time no later than `t`. Event time, source update time, and
-ingestion time are distinct and must be retained. Late-arriving data cannot be included merely
-because its event time precedes `t` if it was not available then.
+Historical trips provide these labels directly. They do not reveal inventory, unmet demand, operator rebalancing, or disabled equipment. Demand predictions must never be described as guaranteed future bike or dock availability.
 
-## Targets and labels
+## Temporal and serving rules
 
-The primary classification targets are:
+Every feature must be known before forecast creation. Splits are chronological, recent-demand lags use completed intervals only, and evaluation reports MAE and RMSE against a recent-rate baseline.
 
-- `empty_at_h`: zero rentable bikes at `target_time`
-- `full_at_h`: zero available docks at `target_time`
-
-Secondary count targets are rentable bikes and available docks at `target_time`. “Became empty
-or full during the interval” is a different optional target and must never be substituted for
-state at the target time.
-
-Select the nearest valid station snapshot within ±3 minutes of `target_time`. An exact-distance
-tie selects the earlier snapshot. If none exists, the example has no label. Do not interpolate a
-classification label across a collection gap.
-
-## Evaluation boundary
-
-Observations are split in chronological blocks, with every station observation at a timestamp in
-the same split. Model calibration uses a temporally later pre-test interval and never the final
-test interval. Rolling-origin backtests are the release evidence; random observation-level splits
-are prohibited.
-
-## Serving and degradation
-
-Every forecast will include data, feature, model, and calibration versions plus data freshness.
-If the station feed exceeds the configured freshness limit, forecasts are suppressed. Fresh
-current status remains available if the model is unavailable. A disabled station cannot be
-recommended. Missing weather may use only a documented degraded feature path supported by the
-approved model. The interface must never present a stale forecast as current.
+Current bikes and docks come from one GBFS refresh when the application starts. They are displayed separately from historical demand forecasts. Stale current status suppresses forecasts. No continuous five-minute laptop collection is required.

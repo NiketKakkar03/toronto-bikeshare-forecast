@@ -8,8 +8,6 @@ let horizon = 30;
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
 })[character]);
-const percent = (value) => `${Math.round(value * 100)}%`;
-const riskClass = (value) => value >= .5 ? "risk-high" : value >= .25 ? "risk-medium" : "";
 
 function renderStations() {
   const needle = search.value.trim().toLowerCase();
@@ -33,14 +31,14 @@ async function renderForecast() {
   if (data.forecast) {
     const value = data.forecast;
     outlook = `<div class="metrics">
-      <div class="metric"><span>Expected bikes</span><strong>${value.bikes_expected}</strong><small>range ${value.bikes_interval[0]}–${value.bikes_interval[1]}</small></div>
-      <div class="metric"><span>Expected docks</span><strong>${value.docks_expected}</strong><small>range ${value.docks_interval[0]}–${value.docks_interval[1]}</small></div>
-      <div class="metric"><span>Empty risk</span><strong class="${riskClass(value.empty_risk)}">${percent(value.empty_risk)}</strong></div>
-      <div class="metric"><span>Full risk</span><strong class="${riskClass(value.full_risk)}">${percent(value.full_risk)}</strong></div>
+      <div class="metric"><span>Expected departures</span><strong>${value.departures_expected}</strong></div>
+      <div class="metric"><span>Expected arrivals</span><strong>${value.arrivals_expected}</strong></div>
+      <div class="metric"><span>Expected net flow</span><strong>${value.net_flow_expected}</strong><small>arrivals minus departures</small></div>
+      <div class="metric"><span>Demand pressure</span><strong>${escapeHtml(value.demand_pressure)}</strong></div>
     </div>`;
   }
   const alternatives = data.alternatives.length ? `<h3>Nearby alternatives</h3><ol class="alternatives">${data.alternatives.map((item) =>
-    `<li><strong>${escapeHtml(item.name)}</strong> · ${item.distance_metres} m · empty risk ${percent(item.empty_risk)}</li>`
+    `<li><strong>${escapeHtml(item.name)}</strong> · ${item.distance_metres} m · ${escapeHtml(item.demand_pressure)} demand pressure</li>`
   ).join("")}</ol>` : "";
   detail.innerHTML = `<h2>${escapeHtml(current.name)}</h2>
     <p>${current.bikes_available} bikes now · ${current.docks_available} docks now</p>

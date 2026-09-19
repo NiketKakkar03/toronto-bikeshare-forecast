@@ -66,8 +66,9 @@ def _alternatives(
                 distance_metres=_distance_metres(selected, station),
                 bikes_available=station.bikes_available,
                 docks_available=station.docks_available,
-                empty_risk=result.forecast.empty_risk,
-                full_risk=result.forecast.full_risk,
+                departures_expected=result.forecast.departures_expected,
+                arrivals_expected=result.forecast.arrivals_expected,
+                demand_pressure=result.forecast.demand_pressure,
             )
         )
     return tuple(sorted(candidates, key=lambda item: (item.distance_metres, item.station_id))[:3])

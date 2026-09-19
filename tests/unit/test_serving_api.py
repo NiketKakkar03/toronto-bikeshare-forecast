@@ -37,7 +37,7 @@ def test_health_and_station_search() -> None:
     assert [station["station_id"] for station in result.json()] == ["7002"]
 
 
-def test_forecast_includes_versions_uncertainty_and_operational_alternatives() -> None:
+def test_forecast_includes_versions_demand_and_operational_alternatives() -> None:
     response = client().get("/api/stations/7001/forecast", params={"horizon": 30})
 
     assert response.status_code == 200
@@ -48,9 +48,11 @@ def test_forecast_includes_versions_uncertainty_and_operational_alternatives() -
     assert body["data_version"] == "fixture-2026-09-17"
     assert body["feature_version"] == "fixture-features-v1"
     assert body["model_version"] == "fixture-persistence-v1"
-    assert body["calibration_version"] == "fixture-calibration-v1"
-    assert len(body["forecast"]["bikes_interval"]) == 2
-    assert 0 <= body["forecast"]["empty_risk"] <= 1
+    assert body["calibration_version"] is None
+    assert body["forecast"]["departures_expected"] >= 0
+    assert body["forecast"]["arrivals_expected"] >= 0
+    assert body["forecast"]["net_flow_expected"] == -0.8
+    assert body["forecast"]["demand_pressure"] == "moderate"
     assert [alternative["station_id"] for alternative in body["alternatives"]] == [
         "7003",
         "7002",

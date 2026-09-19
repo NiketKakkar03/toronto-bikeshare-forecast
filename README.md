@@ -1,8 +1,8 @@
-# Toronto Bike Share Availability Forecasting Platform
+# Toronto Bike Share Demand Forecasting Platform
 
-An independent, public-data project for predicting whether a Toronto Bike Share station will
-have a rentable bike or an open dock 15, 30, or 60 minutes in the future. The initial product
-focus is the 30-minute horizon and honest probabilities rather than guaranteed inventory.
+An independent, public-data project combining current station status with forecasts of departures,
+arrivals, and net flow over the next 15, 30, or 60 minutes. Demand forecasts are never presented
+as guaranteed future inventory.
 
 This repository contains typed source contracts, collector and storage foundations, offline
 historical adapters, a deterministic point-in-time ML pipeline, and a dependency-injected product
@@ -20,8 +20,7 @@ project's rider-facing bike inventory fields.
 
 - Every feature must have been available by the forecast creation time.
 - Evaluation uses chronological backtests, never random row splits.
-- Empty/full probabilities will be calibrated and compared with persistence and seasonal
-  baselines.
+- Departure and arrival estimates are compared with recent-demand baselines.
 - Batch and online inference will share preprocessing and prediction code.
 - Stale or unavailable feeds and models produce explicit degraded behavior, not false precision.
 - Public data sources retain their attribution and licence metadata.
@@ -44,7 +43,7 @@ uv run mypy
 uv run pytest
 ```
 
-Run the offline product demo:
+Run the offline fixture demo:
 
 ```bash
 uv run uvicorn bikeshare_forecast.serving.app:app --reload
@@ -52,7 +51,7 @@ uv run uvicorn bikeshare_forecast.serving.app:app --reload
 
 Open `http://127.0.0.1:8000`. The API exposes `/health`, `/api/stations`, current station status,
 and forecasts at 15, 30, and 60 minutes. Forecast responses carry freshness and version metadata,
-uncertainty, empty/full risk, and operational nearby alternatives. Stale data or an unavailable
+expected departures, arrivals, net flow, and operational nearby alternatives. Stale data or an unavailable
 forecast provider produces an explicit degraded response while preserving current station status.
 
 Inspect the feeds advertised by the live GBFS discovery document:
@@ -105,18 +104,23 @@ perform network calls. Invalid rows are printed with their source row number and
 write; valid imports retain file hash, row number, retrieval time, source schema, and adapter
 version in Parquet. Add a new adapter version rather than silently changing a published mapping.
 
-Build the point-in-time dataset, train separate empty/full classifiers, and evaluate the held-out
-chronological test split:
+Build the point-in-time demand dataset, train departure and arrival regressors, and evaluate the
+held-out chronological test split:
 
 ```bash
-uv run bikeshare dataset-build --silver-dir data/silver/station_snapshots
+uv run bikeshare dataset-build --historical-dir data/historical
 uv run bikeshare train
 uv run bikeshare evaluate
 ```
 
+Start the real application with one live GBFS refresh—no recurring collection required:
+
+```bash
+uv run bikeshare serve --config configs/collection.toml
+```
+
 The resulting manifest records SHA-256 hashes for every model. `ArtifactForecastProvider`
-verifies those hashes before serving 15, 30, or 60-minute empty/full risk estimates over the
-latest persisted station state.
+verifies those hashes before serving demand estimates alongside the latest station state.
 
 ## Repository map
 

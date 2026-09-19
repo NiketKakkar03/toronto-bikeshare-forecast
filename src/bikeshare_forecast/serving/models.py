@@ -33,23 +33,20 @@ class StationStatus(BaseModel):
 
 
 class ForecastValues(BaseModel):
-    """Point prediction and calibrated station failure risks."""
+    """Expected station demand during the selected future horizon."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    bikes_expected: float = Field(ge=0)
-    docks_expected: float = Field(ge=0)
-    bikes_interval: tuple[float, float]
-    docks_interval: tuple[float, float]
-    empty_risk: float = Field(ge=0, le=1)
-    full_risk: float = Field(ge=0, le=1)
+    departures_expected: float = Field(ge=0)
+    arrivals_expected: float = Field(ge=0)
+    net_flow_expected: float
+    demand_pressure: str
 
     @model_validator(mode="after")
-    def intervals_are_ordered(self) -> "ForecastValues":
-        if self.bikes_interval[0] > self.bikes_interval[1]:
-            raise ValueError("bikes interval must be ordered")
-        if self.docks_interval[0] > self.docks_interval[1]:
-            raise ValueError("docks interval must be ordered")
+    def net_flow_is_consistent(self) -> "ForecastValues":
+        expected = self.arrivals_expected - self.departures_expected
+        if abs(self.net_flow_expected - expected) > 0.11:
+            raise ValueError("net flow must equal arrivals minus departures")
         return self
 
 
@@ -81,8 +78,9 @@ class Alternative(BaseModel):
     distance_metres: int = Field(ge=0)
     bikes_available: int = Field(ge=0)
     docks_available: int = Field(ge=0)
-    empty_risk: float = Field(ge=0, le=1)
-    full_risk: float = Field(ge=0, le=1)
+    departures_expected: float = Field(ge=0)
+    arrivals_expected: float = Field(ge=0)
+    demand_pressure: str
 
 
 class ForecastResponse(ForecastResult):

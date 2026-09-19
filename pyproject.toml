@@ -1,7 +1,7 @@
 [project]
 name = "toronto-bikeshare-forecast"
 version = "0.1.0"
-description = "Point-in-time-correct availability forecasting for Toronto Bike Share stations."
+description = "Point-in-time-correct demand forecasting for Toronto Bike Share stations."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }

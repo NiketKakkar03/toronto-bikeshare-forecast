@@ -1,6 +1,5 @@
 """Dependency-injected forecast sources for artifacts and offline demos."""
 
-import math
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,7 +8,7 @@ from typing import Protocol
 import polars as pl
 
 from bikeshare_forecast.ml.common import read_json, sha256_file
-from bikeshare_forecast.ml.evaluate import predict_probability
+from bikeshare_forecast.ml.evaluate import predict_value
 from bikeshare_forecast.serving.models import (
     ForecastResult,
     ForecastValues,
@@ -115,33 +114,14 @@ class FixtureForecastProvider:
                 data_version=station.data_version,
             )
         now = self._clock()
-        drift = {15: 0.5, 30: 1.2, 60: 2.4}[horizon_minutes]
-        bikes = max(0.0, min(float(station.capacity), station.bikes_available - drift))
-        docks = float(station.capacity) - bikes
-        uncertainty = {15: 1.5, 30: 2.5, 60: 4.0}[horizon_minutes]
+        departures = {15: 1.4, 30: 2.8, 60: 5.6}[horizon_minutes]
+        arrivals = {15: 1.0, 30: 2.0, 60: 4.0}[horizon_minutes]
+        net_flow = arrivals - departures
         values = ForecastValues(
-            bikes_expected=round(bikes, 1),
-            docks_expected=round(docks, 1),
-            bikes_interval=(
-                round(max(0.0, bikes - uncertainty), 1),
-                round(min(station.capacity, bikes + uncertainty), 1),
-            ),
-            docks_interval=(
-                round(max(0.0, docks - uncertainty), 1),
-                round(min(station.capacity, docks + uncertainty), 1),
-            ),
-            empty_risk=round(
-                min(
-                    0.95, 0.04 + (horizon_minutes / 60) * 0.12 + (1 / (station.bikes_available + 1))
-                ),
-                3,
-            ),
-            full_risk=round(
-                min(
-                    0.95, 0.03 + (horizon_minutes / 60) * 0.08 + (1 / (station.docks_available + 1))
-                ),
-                3,
-            ),
+            departures_expected=departures,
+            arrivals_expected=arrivals,
+            net_flow_expected=round(net_flow, 2),
+            demand_pressure="high" if abs(net_flow) >= 3 else "moderate",
         )
         return ForecastResult(
             state=ServiceState.AVAILABLE,
@@ -152,7 +132,7 @@ class FixtureForecastProvider:
             data_version=station.data_version,
             feature_version="fixture-features-v1",
             model_version="fixture-persistence-v1",
-            calibration_version="fixture-calibration-v1",
+            calibration_version=None,
             forecast=values,
         )
 
@@ -165,6 +145,7 @@ class ArtifactForecastProvider:
         silver_dir: Path,
         model_dir: Path,
         *,
+        dataset_dir: Path | None = None,
         clock: Callable[[], datetime] = _default_clock,
     ) -> None:
         files = sorted(silver_dir.glob("*.parquet"))
@@ -174,6 +155,10 @@ class ArtifactForecastProvider:
             ["station_id", "source_last_reported_at"]
         )
         self._model_dir = model_dir
+        demand_path = (dataset_dir or model_dir.parent / "dataset") / "dataset.parquet"
+        if not demand_path.exists():
+            raise FileNotFoundError(f"no station-demand dataset at {demand_path}")
+        self._demand = pl.read_parquet(demand_path)
         self._clock = clock
         manifest_path = model_dir / "model-manifest.json"
         self._manifest = read_json(manifest_path)
@@ -217,13 +202,13 @@ class ArtifactForecastProvider:
         station = next(item for item in self._stations if item.station_id == station_id)
         feature_row = self._feature_row(station)
         models = {
-            risk: read_json(self._model_dir / f"logistic-{risk}-{horizon_minutes}m.json")
-            for risk in ("empty", "full")
+            target: read_json(self._model_dir / f"ridge-{target}-{horizon_minutes}m.json")
+            for target in ("departures", "arrivals")
         }
         now = self._clock()
-        uncertainty = math.sqrt(horizon_minutes / 15) * 1.5
-        bikes = float(station.bikes_available)
-        docks = float(station.docks_available)
+        departures = predict_value(models["departures"], feature_row)
+        arrivals = predict_value(models["arrivals"], feature_row)
+        net_flow = arrivals - departures
         return ForecastResult(
             state=ServiceState.AVAILABLE,
             station=station,
@@ -233,46 +218,21 @@ class ArtifactForecastProvider:
             data_version=station.data_version,
             feature_version=str(self._manifest["dataset_sha256"]),
             model_version=sha256_file(self._model_dir / "model-manifest.json"),
-            calibration_version="uncalibrated-logistic-v1",
+            calibration_version=None,
             forecast=ForecastValues(
-                bikes_expected=bikes,
-                docks_expected=docks,
-                bikes_interval=(
-                    max(0.0, bikes - uncertainty),
-                    min(station.capacity, bikes + uncertainty),
-                ),
-                docks_interval=(
-                    max(0.0, docks - uncertainty),
-                    min(station.capacity, docks + uncertainty),
-                ),
-                empty_risk=predict_probability(models["empty"], feature_row),
-                full_risk=predict_probability(models["full"], feature_row),
+                departures_expected=round(departures, 2),
+                arrivals_expected=round(arrivals, 2),
+                net_flow_expected=round(net_flow, 2),
+                demand_pressure="high"
+                if abs(net_flow) >= 5
+                else "moderate"
+                if abs(net_flow) >= 2
+                else "low",
             ),
         )
 
     def _feature_row(self, station: StationStatus) -> dict[str, object]:
-        current = station.observed_at
-        station_history = self._history.filter(pl.col("station_id") == station.station_id)
-
-        def lag(minutes: int) -> float | None:
-            eligible = station_history.filter(
-                pl.col("source_last_reported_at") <= current - timedelta(minutes=minutes)
-            )
-            return float(eligible.tail(1)["bikes_available"][0]) if eligible.height else None
-
-        minute = current.hour * 60 + current.minute
-        weekday = current.weekday()
-        return {
-            "bikes_available": station.bikes_available,
-            "docks_available": station.docks_available,
-            "capacity": station.capacity,
-            "bike_fraction": station.bikes_available / station.capacity
-            if station.capacity
-            else 0.0,
-            "minute_sin": math.sin(2 * math.pi * minute / 1440),
-            "minute_cos": math.cos(2 * math.pi * minute / 1440),
-            "weekday_sin": math.sin(2 * math.pi * weekday / 7),
-            "weekday_cos": math.cos(2 * math.pi * weekday / 7),
-            "bikes_lag_15m": lag(15),
-            "bikes_lag_60m": lag(60),
-        }
+        station_rows = self._demand.filter(pl.col("station_id") == station.station_id)
+        if station_rows.is_empty():
+            raise ValueError(f"station {station.station_id} has no historical demand features")
+        return station_rows.sort("feature_time").tail(1).to_dicts()[0]

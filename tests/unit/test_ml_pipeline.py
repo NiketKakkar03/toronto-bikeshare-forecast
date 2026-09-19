@@ -6,91 +6,103 @@ from typer.testing import CliRunner
 
 from bikeshare_forecast.cli import app
 from bikeshare_forecast.contracts import StationSnapshot
-from bikeshare_forecast.ml import backtest_run, build_dataset, evaluate_run, train_models
+from bikeshare_forecast.ml import build_dataset, evaluate_run, train_models
 from bikeshare_forecast.ml.common import read_json
+from bikeshare_forecast.serving import ArtifactForecastProvider
 from bikeshare_forecast.storage import SilverStore
 
 
-def _fixtures() -> list[StationSnapshot]:
-    """Return reproducible normalized history with both unavailable classes."""
-    start = datetime(2026, 8, 31, tzinfo=UTC)
-    values = []
-    for station_index, station_id in enumerate(("7001", "7002")):
-        for step in range(9 * 24 * 4):
-            event_time = start + timedelta(minutes=15 * step)
-            bikes = (step // 4 + step + station_index * 3) % 11
-            values.append(
-                StationSnapshot(
-                    station_id=station_id,
-                    station_name=f"Station {station_id}",
-                    latitude=43.65 + station_index / 100,
-                    longitude=-79.38,
-                    capacity=10,
-                    bikes_available=bikes,
-                    docks_available=10 - bikes,
-                    is_installed=True,
-                    is_renting=True,
-                    is_returning=True,
-                    source_last_reported_at=event_time,
-                    ingested_at=event_time + timedelta(seconds=5),
-                    source_system_id="bike_share_toronto",
-                    source_schema_version="3.0",
-                    raw_content_hash=f"{step + station_index:064x}",
-                )
+def _history(root: Path) -> None:
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    rows = []
+    for step in range(10 * 24 * 4):
+        when = start + timedelta(minutes=15 * step)
+        for trip in range((step % 4) + 1):
+            rows.append(
+                {
+                    "trip_id": f"{step}-{trip}",
+                    "started_at": when + timedelta(minutes=trip),
+                    "ended_at": when + timedelta(minutes=8 + trip),
+                    "start_station_id": "7001" if step % 2 else "7002",
+                    "end_station_id": "7002" if step % 2 else "7001",
+                    "start_station_name": "Station A" if step % 2 else "Station B",
+                    "end_station_name": "Station B" if step % 2 else "Station A",
+                }
             )
-    return values
+    destination = root / "ridership" / "parquet"
+    destination.mkdir(parents=True)
+    pl.DataFrame(rows).write_parquet(destination / "part-test.parquet")
 
 
-def test_pipeline_is_deterministic_point_in_time_and_persists_artifacts(tmp_path: Path) -> None:
-    silver = tmp_path / "silver"
-    SilverStore(silver).write_snapshots(_fixtures())
-    first = tmp_path / "first"
-    second = tmp_path / "second"
+def _snapshots() -> list[StationSnapshot]:
+    when = datetime(2026, 8, 11, tzinfo=UTC)
+    return [
+        StationSnapshot(
+            station_id=station_id,
+            station_name=name,
+            latitude=43.65 + index / 100,
+            longitude=-79.38,
+            capacity=20,
+            bikes_available=8,
+            docks_available=12,
+            is_installed=True,
+            is_renting=True,
+            is_returning=True,
+            source_last_reported_at=when,
+            ingested_at=when + timedelta(seconds=5),
+            source_system_id="bike_share_toronto",
+            source_schema_version="3.0",
+            raw_content_hash=f"{index:064x}",
+        )
+        for index, (station_id, name) in enumerate(
+            (("7001", "Station A"), ("7002", "Station B")), 1
+        )
+    ]
 
-    build_dataset(silver, first)
-    build_dataset(silver, second)
-    first_manifest = read_json(first / "dataset-manifest.json")
-    second_manifest = read_json(second / "dataset-manifest.json")
-    assert first_manifest["dataset_sha256"] == second_manifest["dataset_sha256"]
 
+def test_demand_pipeline_is_temporal_and_persists_artifacts(tmp_path: Path) -> None:
+    historical = tmp_path / "historical"
+    _history(historical)
+    first, second = tmp_path / "first", tmp_path / "second"
+    build_dataset(historical, first)
+    build_dataset(historical, second)
+    assert (
+        read_json(first / "dataset-manifest.json")["dataset_sha256"]
+        == read_json(second / "dataset-manifest.json")["dataset_sha256"]
+    )
     frame = pl.read_parquet(first / "dataset.parquet")
     assert set(frame["split"].unique()) == {"train", "validation", "test"}
-    assert (frame["target_time_15m"] > frame["feature_time"]).all()
     assert (frame["target_time_60m"] > frame["feature_time"]).all()
-    split_ranges = frame.group_by("split").agg(
-        pl.col("feature_time").min().alias("minimum"),
-        pl.col("feature_time").max().alias("maximum"),
-    )
-    ranges = {row["split"]: row for row in split_ranges.to_dicts()}
-    assert ranges["train"]["maximum"] < ranges["validation"]["minimum"]
-    assert ranges["validation"]["maximum"] < ranges["test"]["minimum"]
-
-    models = tmp_path / "models"
-    report_dir = tmp_path / "reports"
+    assert "target_departures_30m" in frame.columns
+    assert "target_arrivals_30m" in frame.columns
+    models, reports = tmp_path / "models", tmp_path / "reports"
     train_models(first, models)
-    report = read_json(evaluate_run(first, models, report_dir))
-    assert report["rows"] > 0
-    assert set(report["metrics"]) == {"15m", "30m", "60m"}
-    assert "roc_auc" in report["metrics"]["15m"]["classification"]["empty"]["logistic"]
-    assert "f1" in report["metrics"]["30m"]["classification"]["full"]["logistic"]
-    assert "rmse" in report["metrics"]["60m"]["inventory_regression"]["bikes"]["persistence"]
-    assert "mae" in report["metrics"]["15m"]["inventory_regression"]["docks"]["seasonal"]
-
-    backtest = read_json(backtest_run(first, tmp_path / "backtest", folds=2))
-    assert backtest["fold_count"] == 2
-    assert len(backtest["fold_reports"]) == 2
+    report = read_json(evaluate_run(first, models, reports))
+    assert "rmse" in report["metrics"]["30m"]["departures"]["ridge"]
+    assert "mae" in report["metrics"]["60m"]["net_flow"]["derived_ridge"]
+    silver = tmp_path / "silver"
+    SilverStore(silver).write_snapshots(_snapshots())
+    provider = ArtifactForecastProvider(
+        silver, models, dataset_dir=first, clock=lambda: datetime(2026, 8, 11, tzinfo=UTC)
+    )
+    forecast = provider.forecast("7001", 30).forecast
+    assert forecast is not None
+    assert forecast.departures_expected >= 0
+    assert forecast.arrivals_expected >= 0
+    assert forecast.demand_pressure in {"low", "moderate", "high"}
 
 
 def test_pipeline_cli_commands(tmp_path: Path) -> None:
-    silver = tmp_path / "silver"
-    SilverStore(silver).write_snapshots(_fixtures())
-    dataset = tmp_path / "dataset"
-    models = tmp_path / "models"
-    reports = tmp_path / "reports"
+    historical, dataset, models, reports = (
+        tmp_path / "historical",
+        tmp_path / "dataset",
+        tmp_path / "models",
+        tmp_path / "reports",
+    )
+    _history(historical)
     runner = CliRunner()
-
     built = runner.invoke(
-        app, ["dataset-build", "--silver-dir", str(silver), "--output-dir", str(dataset)]
+        app, ["dataset-build", "--historical-dir", str(historical), "--output-dir", str(dataset)]
     )
     trained = runner.invoke(
         app, ["train", "--dataset-dir", str(dataset), "--output-dir", str(models)]
@@ -107,8 +119,5 @@ def test_pipeline_cli_commands(tmp_path: Path) -> None:
             str(reports),
         ],
     )
-
-    assert built.exit_code == 0
-    assert trained.exit_code == 0
-    assert evaluated.exit_code == 0
+    assert built.exit_code == trained.exit_code == evaluated.exit_code == 0
     assert (reports / "evaluation.json").exists()

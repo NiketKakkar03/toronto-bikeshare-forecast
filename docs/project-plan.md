@@ -1,4 +1,6 @@
-# Toronto Bike Share Availability Forecasting Platform
+# Toronto Bike Share Demand Forecasting Platform
+
+> **Scope revision:** The implemented product trains on historical trips to forecast departures, arrivals, and net flow. GBFS is refreshed once when the service starts and supplies current status only. Continuous five-minute station collection is not required. Availability-forecasting sections below remain as the original design record and are superseded by `docs/prediction-contract.md`.
 
 ## High-level overview
 

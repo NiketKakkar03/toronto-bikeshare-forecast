@@ -1,11 +1,11 @@
-"""Command-line collection, modeling, and reporting for station data."""
+"""Command-line collection and reporting for station data."""
 
-import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 
 from bikeshare_forecast.config import load_collection_config
 from bikeshare_forecast.ingestion import (
@@ -13,14 +13,9 @@ from bikeshare_forecast.ingestion import (
     SourceMetadata,
     TorontoRidershipV1Adapter,
 )
-from bikeshare_forecast.ml import (
-    DatasetConfig,
-    backtest_run,
-    build_dataset,
-    evaluate_run,
-    train_models,
-)
+from bikeshare_forecast.ml import DatasetConfig, build_dataset, evaluate_run, train_models
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
+from bikeshare_forecast.serving import ArtifactForecastProvider, create_app
 from bikeshare_forecast.storage import DuckDBCatalogue, HistoricalStore
 
 app = typer.Typer(no_args_is_help=True)
@@ -181,15 +176,13 @@ def historical_summary(
 
 @app.command("dataset-build")
 def dataset_build(
-    silver_dir: Annotated[Path, typer.Option()] = Path("data/silver/station_snapshots"),
+    historical_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
     output_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
-    config: Annotated[Path, typer.Option()] = Path("configs/training.toml"),
+    interval_minutes: Annotated[int, typer.Option(min=1)] = 15,
 ) -> None:
-    """Build a point-in-time dataset with 15/30/60-minute targets."""
+    """Build point-in-time 15/30/60-minute station-demand targets."""
     path = build_dataset(
-        silver_dir,
-        output_dir,
-        DatasetConfig.from_toml(config),
+        historical_dir, output_dir, DatasetConfig(interval_minutes=interval_minutes)
     )
     typer.echo(path)
 
@@ -199,7 +192,7 @@ def train(
     dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
     output_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
 ) -> None:
-    """Train deterministic logistic unavailability classifiers."""
+    """Train deterministic station departure and arrival models."""
     typer.echo(train_models(dataset_dir, output_dir))
 
 
@@ -209,28 +202,29 @@ def evaluate(
     model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
     output_dir: Annotated[Path, typer.Option()] = Path("artifacts/evaluation"),
 ) -> None:
-    """Evaluate classifiers and inventory baselines on the held-out test split."""
+    """Evaluate demand regressors and baselines on the held-out test split."""
     typer.echo(evaluate_run(dataset_dir, model_dir, output_dir))
 
 
-@app.command("backtest")
-def backtest(
+@app.command("serve")
+def serve(
+    config_path: Annotated[Path, typer.Option("--config")] = Path("configs/collection.toml"),
     dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
-    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/backtest"),
-    config: Annotated[Path, typer.Option()] = Path("configs/training.toml"),
+    model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
+    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
 ) -> None:
-    """Run configured expanding-window temporal evaluation folds."""
-    with config.open("rb") as handle:
-        values = tomllib.load(handle)["backtest"]
-    typer.echo(
-        backtest_run(
-            dataset_dir,
-            output_dir,
-            folds=int(values["folds"]),
-            minimum_train_fraction=float(values["minimum_train_fraction"]),
-            evaluation_fraction=float(values["evaluation_fraction"]),
-        )
+    """Refresh live GBFS status once, then serve historical demand forecasts."""
+    config = load_collection_config(config_path)
+    report = StationCollector(config).collect_once()
+    if report.outcome != "success":
+        raise typer.BadParameter(f"live station refresh failed: {report.error_message}")
+    provider = ArtifactForecastProvider(
+        config.storage.silver_dir,
+        model_dir,
+        dataset_dir=dataset_dir,
     )
+    uvicorn.run(create_app(provider), host=host, port=port)
 
 
 if __name__ == "__main__":
