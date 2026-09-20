@@ -1,0 +1,3 @@
+Trip_Id,Trip_Duration,Start_Station_Id,Start_Time,Start_Station_Name,End_Station_Id,End_Time,End_Station_Name,Bike_Id,User_Type,Bike_Model
+1,600,7001,2024-01-01 08:00:00,Station A,7002.0,2024-01-01 08:10:00,Station B,10,Member,ICONIC
+2,300,7002,2024-01-01 09:00:00,Station B,,2024-01-01 09:05:00,,11,Casual,EFIT G5

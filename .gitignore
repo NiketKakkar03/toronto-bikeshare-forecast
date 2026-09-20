@@ -38,6 +38,9 @@ htmlcov/
 data/raw/**
 data/silver/**
 data/gold/**
+data/historical/**
+data/reports/**
+data/source/**
 !data/raw/.gitkeep
 !data/silver/.gitkeep
 !data/gold/.gitkeep

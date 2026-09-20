@@ -13,8 +13,13 @@ from bikeshare_forecast.ingestion.historical import (
     SourceMetadata,
     TorontoRidershipV1Adapter,
 )
+from bikeshare_forecast.ingestion.toronto_bulk import (
+    BulkImportResult,
+    import_toronto_ridership_2024,
+)
 
 __all__ = [
+    "BulkImportResult",
     "CollectionResult",
     "EcccHourlyV1Adapter",
     "HistoricalImport",
@@ -25,4 +30,5 @@ __all__ = [
     "collect_once",
     "fetch_discovery",
     "fetch_station_feeds",
+    "import_toronto_ridership_2024",
 ]

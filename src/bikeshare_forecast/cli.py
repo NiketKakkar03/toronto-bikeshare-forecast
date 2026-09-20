@@ -12,6 +12,7 @@ from bikeshare_forecast.ingestion import (
     EcccHourlyV1Adapter,
     SourceMetadata,
     TorontoRidershipV1Adapter,
+    import_toronto_ridership_2024,
 )
 from bikeshare_forecast.ml import DatasetConfig, build_dataset, evaluate_run, train_models
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
@@ -124,6 +125,22 @@ def import_ridership(
     output_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
 ) -> None:
     """Validate and persist a local Toronto ridership v1 CSV."""
+    if source.name == "bikeshare-ridership-2024.csv":
+        bulk_result = import_toronto_ridership_2024(
+            source,
+            output_dir,
+            metadata=SourceMetadata(
+                source_name=source_name,
+                retrieved_at=_metadata(source_name, retrieved_at).retrieved_at,
+                source_url=("https://open.toronto.ca/dataset/bike-share-toronto-ridership-data/"),
+                licence="Open Government Licence - Toronto",
+            ),
+        )
+        typer.echo(f"accepted_rows: {bulk_result.rows_written}")
+        typer.echo(f"rejected_rows: {bulk_result.rejected_rows}")
+        typer.echo(f"duplicate_rows: {bulk_result.duplicates_ignored}")
+        typer.echo(f"rows_written: {bulk_result.rows_written}")
+        return
     imported = TorontoRidershipV1Adapter().from_path(
         source, metadata=_metadata(source_name, retrieved_at)
     )
