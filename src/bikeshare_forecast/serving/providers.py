@@ -200,7 +200,18 @@ class ArtifactForecastProvider:
 
     def forecast(self, station_id: str, horizon_minutes: int) -> ForecastResult:
         station = next(item for item in self._stations if item.station_id == station_id)
-        feature_row = self._feature_row(station)
+        try:
+            feature_row = self._feature_row(station)
+        except ValueError as error:
+            return ForecastResult(
+                state=ServiceState.UNAVAILABLE,
+                reason=str(error),
+                station=station,
+                horizon_minutes=horizon_minutes,
+                data_version=station.data_version,
+                feature_version=str(self._manifest["dataset_sha256"]),
+                model_version=sha256_file(self._model_dir / "model-manifest.json"),
+            )
         models = {
             target: read_json(self._model_dir / f"ridge-{target}-{horizon_minutes}m.json")
             for target in ("departures", "arrivals")

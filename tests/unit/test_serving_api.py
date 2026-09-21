@@ -3,6 +3,12 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 
 from bikeshare_forecast.serving import FixtureForecastProvider, create_app
+from bikeshare_forecast.serving.models import (
+    ForecastResult,
+    ForecastValues,
+    ServiceState,
+    StationStatus,
+)
 
 NOW = datetime(2026, 9, 17, 16, 0, tzinfo=UTC)
 
@@ -81,6 +87,73 @@ def test_model_unavailable_keeps_fresh_current_status() -> None:
     assert body["forecast"] is None
     assert body["freshness_seconds"] == 45
     assert body["station"]["docks_available"] == 14
+
+
+def test_unavailable_alternative_does_not_break_forecast_response() -> None:
+    stations = (
+        StationStatus(
+            station_id="7001",
+            name="Selected",
+            latitude=43.65,
+            longitude=-79.38,
+            capacity=20,
+            bikes_available=6,
+            docks_available=14,
+            is_renting=True,
+            is_returning=True,
+            observed_at=NOW,
+            data_version="test",
+        ),
+        StationStatus(
+            station_id="7382",
+            name="Missing History",
+            latitude=43.651,
+            longitude=-79.381,
+            capacity=20,
+            bikes_available=7,
+            docks_available=13,
+            is_renting=True,
+            is_returning=True,
+            observed_at=NOW,
+            data_version="test",
+        ),
+    )
+
+    class Provider:
+        def stations(self) -> tuple[StationStatus, ...]:
+            return stations
+
+        def forecast(self, station_id: str, horizon_minutes: int) -> ForecastResult:
+            station = next(item for item in stations if item.station_id == station_id)
+            if station_id == "7382":
+                return ForecastResult(
+                    state=ServiceState.UNAVAILABLE,
+                    reason="station 7382 has no historical demand features",
+                    station=station,
+                    horizon_minutes=horizon_minutes,
+                    data_version=station.data_version,
+                )
+            return ForecastResult(
+                state=ServiceState.AVAILABLE,
+                station=station,
+                horizon_minutes=horizon_minutes,
+                data_version=station.data_version,
+                forecast=ForecastValues(
+                    departures_expected=1,
+                    arrivals_expected=2,
+                    net_flow_expected=1,
+                    demand_pressure="low",
+                ),
+            )
+
+    response = TestClient(create_app(Provider(), clock=lambda: NOW)).get(
+        "/api/stations/7001/forecast"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "available"
+    assert body["alternatives"] == []
 
 
 def test_rejects_unknown_station_and_horizon() -> None:
