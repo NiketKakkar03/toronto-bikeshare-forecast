@@ -9,6 +9,7 @@ from bikeshare_forecast.ingestion.gbfs import (
 )
 from bikeshare_forecast.ingestion.historical import (
     EcccHourlyV1Adapter,
+    EcccTorontoCity2024Adapter,
     HistoricalImport,
     SourceMetadata,
     TorontoRidershipV1Adapter,
@@ -22,6 +23,7 @@ __all__ = [
     "BulkImportResult",
     "CollectionResult",
     "EcccHourlyV1Adapter",
+    "EcccTorontoCity2024Adapter",
     "HistoricalImport",
     "MissingFeedError",
     "SourceMetadata",

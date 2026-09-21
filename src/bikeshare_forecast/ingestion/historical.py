@@ -7,7 +7,7 @@ import hashlib
 import io
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 from zoneinfo import ZoneInfo
@@ -196,6 +196,27 @@ class EcccHourlyV1Adapter(_CsvAdapter[HistoricalWeatherObservation]):
         )
 
 
+class EcccTorontoCity2024Adapter(_CsvAdapter[HistoricalWeatherObservation]):
+    """Adapter for official Toronto City Centre hourly files using local standard time."""
+
+    dataset = "weather"
+    source_schema_version = "eccc-toronto-city-hourly-2024"
+
+    def _adapt(
+        self, row: Mapping[str, Any], *, lineage: SourceLineage
+    ) -> HistoricalWeatherObservation:
+        return HistoricalWeatherObservation(
+            climate_station_id=_clean_id(_required(row, "Climate ID")),
+            observed_at=_local_standard_datetime(_required(row, "Date/Time (LST)")),
+            temperature_c=_optional_float(row, "Temp (°C)"),
+            precipitation_mm=_optional_float(row, "Precip. Amount (mm)"),
+            wind_speed_kph=_optional_float(row, "Wind Spd (km/h)"),
+            relative_humidity_pct=_optional_float(row, "Rel Hum (%)"),
+            condition=_optional(row, "Weather"),
+            lineage=lineage,
+        )
+
+
 def _required(row: Mapping[str, Any], column: str) -> str:
     if column not in row:
         raise KeyError(f"missing required column: {column}")
@@ -230,6 +251,13 @@ def _local_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=TORONTO)
+    return parsed.astimezone(UTC)
+
+
+def _local_standard_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=-5)))
     return parsed.astimezone(UTC)
 
 

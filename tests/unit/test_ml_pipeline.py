@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from bikeshare_forecast.cli import app
 from bikeshare_forecast.contracts import StationSnapshot
-from bikeshare_forecast.ml import build_dataset, evaluate_run, train_models
+from bikeshare_forecast.ml import build_dataset, diagnostics_run, evaluate_run, train_models
 from bikeshare_forecast.ml.common import read_json
 from bikeshare_forecast.serving import ArtifactForecastProvider
 from bikeshare_forecast.storage import SilverStore
@@ -121,3 +121,48 @@ def test_pipeline_cli_commands(tmp_path: Path) -> None:
     )
     assert built.exit_code == trained.exit_code == evaluated.exit_code == 0
     assert (reports / "evaluation.json").exists()
+
+
+def test_station_diagnostics_report_and_cli(tmp_path: Path) -> None:
+    historical = tmp_path / "historical"
+    dataset = tmp_path / "dataset"
+    models = tmp_path / "models"
+    reports = tmp_path / "reports"
+    _history(historical)
+    build_dataset(historical, dataset)
+    train_models(dataset, models)
+
+    report_path = diagnostics_run(dataset, models, reports, worst_station_limit=1)
+    report = read_json(report_path)
+    departures = report["diagnostics"]["15m"]["departures"]
+    assert report["evaluation_split"] == "test"
+    assert departures["station_count"] == 2
+    assert 0 <= departures["stations_beating_baseline_percent"] <= 100
+    assert len(departures["worst_stations"]) == 1
+    assert {"mae", "rmse", "bias", "baseline_mae"} <= departures["stations"][0].keys()
+    assert departures["hour_of_day"]
+    assert departures["weekday"]
+    assert {row["period"] for row in departures["rush_hour"]} <= {"rush_hour", "other"}
+    assert {row["activity_segment"] for row in departures["activity_segments"]} <= {
+        "quiet",
+        "medium",
+        "busy",
+    }
+
+    cli_reports = tmp_path / "cli-reports"
+    result = CliRunner().invoke(
+        app,
+        [
+            "diagnostics",
+            "--dataset-dir",
+            str(dataset),
+            "--model-dir",
+            str(models),
+            "--output-dir",
+            str(cli_reports),
+            "--worst-stations",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (cli_reports / "diagnostics.json").exists()

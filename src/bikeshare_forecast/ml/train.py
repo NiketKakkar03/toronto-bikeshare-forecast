@@ -63,7 +63,8 @@ def train_models(dataset_dir: Path, output_dir: Path) -> Path:
         means = [float(statistics[index * 2]) for index in range(len(columns))]
         scales = [max(float(statistics[index * 2 + 1]), 1e-12) for index in range(len(columns))]
         standardized = [
-            f"(({column}-({means[index]}))/{scales[index]})" for index, column in enumerate(columns)
+            f"((CAST({column} AS DOUBLE)-({means[index]}))/{scales[index]})"
+            for index, column in enumerate(columns)
         ]
         output_dir.mkdir(parents=True, exist_ok=True)
         files: list[dict[str, object]] = []

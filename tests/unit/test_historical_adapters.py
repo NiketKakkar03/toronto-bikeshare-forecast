@@ -5,6 +5,7 @@ import pytest
 
 from bikeshare_forecast.ingestion import (
     EcccHourlyV1Adapter,
+    EcccTorontoCity2024Adapter,
     SourceMetadata,
     TorontoRidershipV1Adapter,
 )
@@ -53,6 +54,28 @@ def test_weather_adapter_preserves_missing_values_and_utc() -> None:
     assert imported.records[0].climate_station_id == "6158355"
     assert imported.records[0].temperature_c is None
     assert imported.summary.missing_optional_value_count == 3
+
+
+def test_toronto_city_weather_adapter_interprets_local_standard_time() -> None:
+    imported = EcccTorontoCity2024Adapter().from_rows(
+        [
+            {
+                "Climate ID": "6158359",
+                "Date/Time (LST)": "2024-01-01 08:00",
+                "Temp (°C)": "-1.2",
+                "Precip. Amount (mm)": "0.2",
+                "Wind Spd (km/h)": "15",
+                "Rel Hum (%)": "80",
+                "Weather": "Snow",
+            }
+        ],
+        metadata=METADATA,
+        source_file="official.csv",
+        source_content_hash="d" * 64,
+    )
+    assert imported.failures == ()
+    assert imported.records[0].observed_at == datetime(2024, 1, 1, 13, tzinfo=UTC)
+    assert imported.records[0].condition == "Snow"
 
 
 def test_invalid_rows_are_reported_and_strict_boundary_fails() -> None:

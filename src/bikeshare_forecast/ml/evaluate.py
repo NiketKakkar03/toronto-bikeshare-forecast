@@ -38,7 +38,7 @@ def _prediction_sql(model: dict[str, Any]) -> str:
         mean = float(model["standardization_means"][index])
         scale = float(model["standardization_scales"][index])
         weight = float(model["weights"][index])
-        pieces.append(f"({weight})*(({column}-({mean}))/({scale}))")
+        pieces.append(f"({weight})*((CAST({column} AS DOUBLE)-({mean}))/({scale}))")
     return f"greatest(0.0, {' + '.join(pieces)})"
 
 

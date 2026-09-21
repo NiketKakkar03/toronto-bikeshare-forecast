@@ -10,11 +10,18 @@ import uvicorn
 from bikeshare_forecast.config import load_collection_config
 from bikeshare_forecast.ingestion import (
     EcccHourlyV1Adapter,
+    EcccTorontoCity2024Adapter,
     SourceMetadata,
     TorontoRidershipV1Adapter,
     import_toronto_ridership_2024,
 )
-from bikeshare_forecast.ml import DatasetConfig, build_dataset, evaluate_run, train_models
+from bikeshare_forecast.ml import (
+    DatasetConfig,
+    build_dataset,
+    diagnostics_run,
+    evaluate_run,
+    train_models,
+)
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
 from bikeshare_forecast.serving import ArtifactForecastProvider, create_app
 from bikeshare_forecast.storage import DuckDBCatalogue, HistoricalStore
@@ -162,9 +169,12 @@ def import_weather(
     output_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
 ) -> None:
     """Validate and persist a local ECCC hourly v1 CSV."""
-    imported = EcccHourlyV1Adapter().from_path(
-        source, metadata=_metadata(source_name, retrieved_at)
+    adapter = (
+        EcccTorontoCity2024Adapter()
+        if source.name.startswith("toronto-city-centre-")
+        else EcccHourlyV1Adapter()
     )
+    imported = adapter.from_path(source, metadata=_metadata(source_name, retrieved_at))
     if imported.failures:
         for failure in imported.failures:
             typer.echo(f"row {failure.row_number}: {failure.code}: {failure.message}", err=True)
@@ -221,6 +231,24 @@ def evaluate(
 ) -> None:
     """Evaluate demand regressors and baselines on the held-out test split."""
     typer.echo(evaluate_run(dataset_dir, model_dir, output_dir))
+
+
+@app.command("diagnostics")
+def diagnostics(
+    dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/evaluation"),
+    worst_stations: Annotated[int, typer.Option(min=1)] = 10,
+) -> None:
+    """Report station and time-segment errors on the held-out test split."""
+    typer.echo(
+        diagnostics_run(
+            dataset_dir,
+            model_dir,
+            output_dir,
+            worst_station_limit=worst_stations,
+        )
+    )
 
 
 @app.command("serve")
