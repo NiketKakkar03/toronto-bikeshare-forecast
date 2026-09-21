@@ -156,6 +156,73 @@ def test_unavailable_alternative_does_not_break_forecast_response() -> None:
     assert body["alternatives"] == []
 
 
+def test_alternatives_only_forecast_nearby_candidate_window() -> None:
+    stations = [
+        StationStatus(
+            station_id="7001",
+            name="Selected",
+            latitude=43.65,
+            longitude=-79.38,
+            capacity=20,
+            bikes_available=6,
+            docks_available=14,
+            is_renting=True,
+            is_returning=True,
+            observed_at=NOW,
+            data_version="test",
+        )
+    ]
+    stations.extend(
+        StationStatus(
+            station_id=f"8{index:03d}",
+            name=f"Candidate {index}",
+            latitude=43.65 + index * 0.0001,
+            longitude=-79.38,
+            capacity=20,
+            bikes_available=6,
+            docks_available=14,
+            is_renting=True,
+            is_returning=True,
+            observed_at=NOW,
+            data_version="test",
+        )
+        for index in range(1, 31)
+    )
+    forecasted: list[str] = []
+
+    class Provider:
+        def stations(self) -> tuple[StationStatus, ...]:
+            return tuple(stations)
+
+        def forecast(self, station_id: str, horizon_minutes: int) -> ForecastResult:
+            forecasted.append(station_id)
+            station = next(item for item in stations if item.station_id == station_id)
+            return ForecastResult(
+                state=ServiceState.AVAILABLE,
+                station=station,
+                horizon_minutes=horizon_minutes,
+                data_version=station.data_version,
+                forecast=ForecastValues(
+                    departures_expected=1,
+                    arrivals_expected=2,
+                    net_flow_expected=1,
+                    demand_pressure="low",
+                ),
+            )
+
+    response = TestClient(create_app(Provider(), clock=lambda: NOW)).get(
+        "/api/stations/7001/forecast"
+    )
+
+    assert response.status_code == 200
+    assert forecasted == ["7001", *(f"8{index:03d}" for index in range(1, 21))]
+    assert [item["station_id"] for item in response.json()["alternatives"]] == [
+        "8001",
+        "8002",
+        "8003",
+    ]
+
+
 def test_rejects_unknown_station_and_horizon() -> None:
     api = client()
 

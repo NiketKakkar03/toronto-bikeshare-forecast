@@ -158,7 +158,14 @@ class ArtifactForecastProvider:
         demand_path = (dataset_dir or model_dir.parent / "dataset") / "dataset.parquet"
         if not demand_path.exists():
             raise FileNotFoundError(f"no station-demand dataset at {demand_path}")
-        self._demand = pl.read_parquet(demand_path)
+        demand = pl.read_parquet(demand_path)
+        self._latest_features = {
+            str(row["station_id"]): row
+            for row in demand.sort(["station_id", "feature_time"])
+            .group_by("station_id", maintain_order=True)
+            .tail(1)
+            .to_dicts()
+        }
         self._clock = clock
         manifest_path = model_dir / "model-manifest.json"
         self._manifest = read_json(manifest_path)
@@ -243,7 +250,7 @@ class ArtifactForecastProvider:
         )
 
     def _feature_row(self, station: StationStatus) -> dict[str, object]:
-        station_rows = self._demand.filter(pl.col("station_id") == station.station_id)
-        if station_rows.is_empty():
+        row = self._latest_features.get(station.station_id)
+        if row is None:
             raise ValueError(f"station {station.station_id} has no historical demand features")
-        return station_rows.sort("feature_time").tail(1).to_dicts()[0]
+        return row

@@ -22,6 +22,7 @@ from bikeshare_forecast.serving.providers import (
 )
 
 DEFAULT_FRESHNESS_LIMIT_SECONDS = 300
+ALTERNATIVE_FORECAST_CANDIDATES = 20
 STATIC_DIR = Path(__file__).with_name("static")
 
 
@@ -51,11 +52,17 @@ def _alternatives(
     horizon: int,
 ) -> tuple[Alternative, ...]:
     candidates: list[Alternative] = []
-    for station in provider.stations():
-        if station.station_id == selected.station_id or not (
-            station.is_renting and station.is_returning
-        ):
-            continue
+    nearby = sorted(
+        (
+            (_distance_metres(selected, station), station)
+            for station in provider.stations()
+            if station.station_id != selected.station_id
+            and station.is_renting
+            and station.is_returning
+        ),
+        key=lambda item: (item[0], item[1].station_id),
+    )
+    for distance, station in nearby[:ALTERNATIVE_FORECAST_CANDIDATES]:
         result = provider.forecast(station.station_id, horizon)
         if result.state is not ServiceState.AVAILABLE or result.forecast is None:
             continue
@@ -63,7 +70,7 @@ def _alternatives(
             Alternative(
                 station_id=station.station_id,
                 name=station.name,
-                distance_metres=_distance_metres(selected, station),
+                distance_metres=distance,
                 bikes_available=station.bikes_available,
                 docks_available=station.docks_available,
                 departures_expected=result.forecast.departures_expected,
