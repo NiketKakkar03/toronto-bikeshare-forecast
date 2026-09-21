@@ -17,6 +17,7 @@ from bikeshare_forecast.ingestion.historical import (
 from bikeshare_forecast.ingestion.toronto_bulk import (
     BulkImportResult,
     import_toronto_ridership_2024,
+    import_toronto_ridership_official,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "fetch_discovery",
     "fetch_station_feeds",
     "import_toronto_ridership_2024",
+    "import_toronto_ridership_official",
 ]

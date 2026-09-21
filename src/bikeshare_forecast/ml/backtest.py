@@ -52,14 +52,18 @@ def backtest_run(
     reports: list[dict[str, Any]] = []
     for number, cutoff_index in enumerate(cutoffs, start=1):
         test_end_index = min(cutoff_index + evaluation_count, len(times))
+        validation_start_index = max(0, cutoff_index - evaluation_count)
+        validation_start = times[validation_start_index]
         cutoff = times[cutoff_index]
         test_end = times[test_end_index] if test_end_index < len(times) else None
         in_test_window = pl.col("feature_time") >= cutoff
         if test_end is not None:
             in_test_window &= pl.col("feature_time") < test_end
         fold = frame.with_columns(
-            pl.when(pl.col("feature_time") < cutoff)
+            pl.when(pl.col("feature_time") < validation_start)
             .then(pl.lit("train"))
+            .when(pl.col("feature_time") < cutoff)
+            .then(pl.lit("validation"))
             .when(in_test_window)
             .then(pl.lit("test"))
             .otherwise(pl.lit("unused"))
@@ -70,12 +74,18 @@ def backtest_run(
         fold_dataset.mkdir(parents=True, exist_ok=True)
         fold_path = fold_dataset / "dataset.parquet"
         fold.write_parquet(fold_path, compression="zstd")
+        split_counts = dict(
+            fold.group_by("split").len().select(pl.col("split"), pl.col("len")).iter_rows()
+        )
         fold_manifest = {
             **source_manifest,
             "dataset_sha256": sha256_file(fold_path),
             "parent_dataset_sha256": source_manifest["dataset_sha256"],
             "backtest_fold": number,
-            "backtest_train_end_exclusive": cutoff.isoformat(),
+            "split_counts": split_counts,
+            "backtest_train_end_exclusive": validation_start.isoformat(),
+            "backtest_validation_start_inclusive": validation_start.isoformat(),
+            "backtest_validation_end_exclusive": cutoff.isoformat(),
             "backtest_test_end_exclusive": test_end.isoformat() if test_end else None,
         }
         write_json(fold_dataset / "dataset-manifest.json", fold_manifest)

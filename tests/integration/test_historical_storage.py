@@ -1,3 +1,4 @@
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,10 +11,25 @@ from bikeshare_forecast.ingestion import (
     EcccHourlyV1Adapter,
     SourceMetadata,
     TorontoRidershipV1Adapter,
+    import_toronto_ridership_official,
 )
 from bikeshare_forecast.storage import HistoricalStore
 
 FIXTURES = Path(__file__).parents[2] / "data" / "fixtures" / "historical"
+OFFICIAL_2022_2023_HEADER = ",".join(
+    (
+        "Trip Id",
+        "Trip  Duration",
+        "Start Station Id",
+        "Start Time",
+        "Start Station Name",
+        "End Station Id",
+        "End Time",
+        "End Station Name",
+        "Bike Id",
+        "User Type",
+    )
+)
 
 
 def metadata() -> SourceMetadata:
@@ -86,3 +102,89 @@ def test_historical_import_and_summary_cli(tmp_path: Path) -> None:
     assert "rows_written: 2" in imported.stdout
     assert summary.exit_code == 0
     assert "accepted_rows: 2" in summary.stdout
+
+
+def test_official_2023_monthly_import_streams_to_canonical_parquet(tmp_path: Path) -> None:
+    source = tmp_path / "Bike share ridership 2023-01.csv"
+    source.write_text(
+        "\n".join(
+            [
+                OFFICIAL_2022_2023_HEADER,
+                ",".join(
+                    (
+                        "20354837",
+                        "175",
+                        "7457",
+                        "02/01/2023 00:01",
+                        "Queen's Park Cres W / Hoskin Ave",
+                        "7190",
+                        "02/01/2023 00:03",
+                        "St. George St / Hoskin Ave",
+                        "538",
+                        "Casual Member",
+                    )
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = import_toronto_ridership_official(source, tmp_path / "history", metadata=metadata())
+
+    assert result.rows_written == 1
+    assert result.rejected_rows == 0
+    assert result.parquet_path.exists()
+    with duckdb.connect() as connection:
+        row = connection.execute(
+            "SELECT trip_id, started_at, start_station_id, bike_type, user_type, "
+            "source_schema_version FROM read_parquet(?)",
+            [str(result.parquet_path)],
+        ).fetchone()
+    assert row == (
+        "20354837",
+        datetime(2023, 2, 1, 5, 1, tzinfo=UTC),
+        "7457",
+        None,
+        "Casual Member",
+        "toronto-ridership-2023",
+    )
+
+
+def test_official_2022_nested_zip_import_uses_member_hash(tmp_path: Path) -> None:
+    source = tmp_path / "Bike share ridership 2022-11.zip"
+    member = "Bike share ridership 2022-11.csv"
+    csv_bytes = "\n".join(
+        [
+            OFFICIAL_2022_2023_HEADER,
+            ",".join(
+                (
+                    "19571966",
+                    "523",
+                    "7001",
+                    "11/01/2022 00:00",
+                    "Wellesley Station Green P",
+                    "7058",
+                    "11/01/2022 00:09",
+                    "Huron/ Harbord St",
+                    "3921",
+                    "Casual Member",
+                )
+            ),
+        ]
+    ).encode()
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr(member, csv_bytes)
+
+    result = import_toronto_ridership_official(source, tmp_path / "history", metadata=metadata())
+
+    assert result.rows_written == 1
+    with duckdb.connect() as connection:
+        row = connection.execute(
+            "SELECT source_file, source_schema_version FROM read_parquet(?)",
+            [str(result.parquet_path)],
+        ).fetchone()
+    assert row == (
+        "Bike share ridership 2022-11.zip!Bike share ridership 2022-11.csv",
+        "toronto-ridership-2022",
+    )

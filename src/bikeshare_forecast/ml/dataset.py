@@ -52,6 +52,7 @@ class DatasetConfig:
     inactive_sample_rate: int = 20
     train_fraction: float = 0.6
     validation_fraction: float = 0.2
+    sort_output: bool = True
 
 
 def _sql_path(path: Path) -> str:
@@ -217,11 +218,22 @@ def build_dataset(
             f"                coalesce(l_{name}.arrivals,0)::INTEGER arrivals_lag_{name}"
             for name, _ in LAGS
         )
+        output_order = "ORDER BY g.feature_time, g.station_id" if policy.sort_output else ""
         query = f"""COPY (
-            WITH stations AS (SELECT station_id, any_value(station_name) station_name FROM counts GROUP BY station_id),
+            WITH stations AS (
+                SELECT station_id, any_value(station_name) station_name,
+                       min(feature_time) first_feature_time,
+                       max(feature_time) last_feature_time
+                FROM counts GROUP BY station_id
+            ),
             grid AS (
                 SELECT s.station_id, s.station_name, gs feature_time
-                FROM stations s, generate_series(cast({_sql(first)} AS TIMESTAMPTZ), cast({_sql(last)} AS TIMESTAMPTZ) - INTERVAL '{max(policy.horizons_minutes)} minutes', INTERVAL '{interval} minutes') t(gs)
+                FROM stations s,
+                     generate_series(
+                         s.first_feature_time,
+                         least(s.last_feature_time, cast({_sql(last)} AS TIMESTAMPTZ) - INTERVAL '{max(policy.horizons_minutes)} minutes'),
+                         INTERVAL '{interval} minutes'
+                     ) t(gs)
             ), history_grid AS (
                 SELECT g.*,
                        extract(dow FROM timezone('America/Toronto', g.feature_time)) local_weekday,
@@ -276,7 +288,7 @@ def build_dataset(
             {" ".join(joins)}
             WHERE coalesce(l_15m.departures,0)+coalesce(l_15m.arrivals,0)+coalesce(l_2h.departures,0)+coalesce(l_2h.arrivals,0) > 0
                OR hash(g.station_id, g.feature_time) % {policy.inactive_sample_rate} = 0
-            ORDER BY g.feature_time, g.station_id
+            {output_order}
         ) TO {_sql_path(temporary)} (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)"""
         connection.execute(query)
         split_counts = connection.execute(

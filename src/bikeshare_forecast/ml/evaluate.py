@@ -53,6 +53,39 @@ def _metrics(
     return {"mae": float(values[0]), "rmse": float(values[1])}
 
 
+def _prediction_interval_metrics(
+    connection: duckdb.DuckDBPyConnection,
+    source: str,
+    actual: str,
+    predicted: str,
+) -> dict[str, dict[str, float]]:
+    intervals: dict[str, dict[str, float]] = {}
+    for coverage in (0.8, 0.9):
+        width = connection.execute(
+            f"SELECT quantile_cont(abs(({predicted})-({actual})), {coverage}) "
+            f"FROM {source} WHERE split='validation'"
+        ).fetchone()
+        if width is None or width[0] is None:
+            raise ValueError("validation split is empty; cannot calibrate prediction intervals")
+        half_width = float(width[0])
+        test = connection.execute(
+            f"""SELECT
+                avg((({actual}) BETWEEN ({predicted})-({half_width})
+                    AND ({predicted})+({half_width}))::INTEGER),
+                avg(2.0*({half_width}))
+                FROM {source} WHERE split='test'"""
+        ).fetchone()
+        if test is None:
+            raise ValueError("test interval metrics are unavailable")
+        intervals[f"p{int(coverage * 100)}"] = {
+            "nominal_coverage": coverage,
+            "empirical_coverage": float(test[0]),
+            "mean_width": float(test[1]),
+            "half_width": half_width,
+        }
+    return intervals
+
+
 def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
     """Evaluate demand models and recent-rate baselines without loading all rows."""
     dataset_path = dataset_dir / "dataset.parquet"
@@ -85,12 +118,18 @@ def evaluate_run(dataset_dir: Path, model_dir: Path, output_dir: Path) -> Path:
                 metrics[target] = {
                     "ridge": _metrics(connection, source, actual, prediction),
                     "recent_rate": _metrics(connection, source, actual, baseline),
+                    "prediction_intervals": _prediction_interval_metrics(
+                        connection, source, actual, prediction
+                    ),
                 }
                 model_hashes.append({"path": model_path.name, "sha256": sha256_file(model_path)})
             actual_net = f"target_net_flow_{horizon}m"
             predicted_net = f"({predictions['arrivals']})-({predictions['departures']})"
             metrics["net_flow"] = {
-                "derived_ridge": _metrics(connection, source, actual_net, predicted_net)
+                "derived_ridge": _metrics(connection, source, actual_net, predicted_net),
+                "prediction_intervals": _prediction_interval_metrics(
+                    connection, source, actual_net, predicted_net
+                ),
             }
             results[f"{horizon}m"] = metrics
     report = {

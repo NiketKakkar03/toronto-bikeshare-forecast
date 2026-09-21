@@ -13,7 +13,7 @@ from bikeshare_forecast.ingestion import (
     EcccTorontoCity2024Adapter,
     SourceMetadata,
     TorontoRidershipV1Adapter,
-    import_toronto_ridership_2024,
+    import_toronto_ridership_official,
 )
 from bikeshare_forecast.ml import (
     DatasetConfig,
@@ -132,8 +132,8 @@ def import_ridership(
     output_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
 ) -> None:
     """Validate and persist a local Toronto ridership v1 CSV."""
-    if source.name == "bikeshare-ridership-2024.csv":
-        bulk_result = import_toronto_ridership_2024(
+    if _is_official_toronto_ridership(source):
+        bulk_result = import_toronto_ridership_official(
             source,
             output_dir,
             metadata=SourceMetadata(
@@ -143,7 +143,7 @@ def import_ridership(
                 licence="Open Government Licence - Toronto",
             ),
         )
-        typer.echo(f"accepted_rows: {bulk_result.rows_written}")
+        typer.echo(f"accepted_rows: {bulk_result.accepted_rows}")
         typer.echo(f"rejected_rows: {bulk_result.rejected_rows}")
         typer.echo(f"duplicate_rows: {bulk_result.duplicates_ignored}")
         typer.echo(f"rows_written: {bulk_result.rows_written}")
@@ -159,6 +159,18 @@ def import_ridership(
     typer.echo(f"accepted_rows: {imported.summary.accepted_rows}")
     typer.echo(f"duplicate_rows: {imported.summary.duplicate_rows + result.duplicates_ignored}")
     typer.echo(f"rows_written: {result.rows_written}")
+
+
+def _is_official_toronto_ridership(source: Path) -> bool:
+    name = source.name.lower()
+    if source.suffix.lower() not in {".csv", ".zip"}:
+        return False
+    return (
+        name.startswith("bike share ridership 2022-")
+        or name.startswith("bike share ridership 2023-")
+        or name == "bikeshare-ridership-2024.csv"
+        or name.startswith("bikeshare_2025_")
+    )
 
 
 @app.command("import-weather")
@@ -206,10 +218,18 @@ def dataset_build(
     historical_dir: Annotated[Path, typer.Option()] = Path("data/historical"),
     output_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
     interval_minutes: Annotated[int, typer.Option(min=1)] = 15,
+    inactive_sample_rate: Annotated[int, typer.Option(min=1)] = 20,
+    sort_output: Annotated[bool, typer.Option()] = True,
 ) -> None:
     """Build point-in-time 15/30/60-minute station-demand targets."""
     path = build_dataset(
-        historical_dir, output_dir, DatasetConfig(interval_minutes=interval_minutes)
+        historical_dir,
+        output_dir,
+        DatasetConfig(
+            interval_minutes=interval_minutes,
+            inactive_sample_rate=inactive_sample_rate,
+            sort_output=sort_output,
+        ),
     )
     typer.echo(path)
 
