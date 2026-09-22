@@ -8,6 +8,7 @@ let horizon = 30;
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
 })[character]);
+const riskClass = (risk) => `risk-${risk === "high" ? "high" : risk === "medium" ? "medium" : "low"}`;
 
 function renderStations() {
   const needle = search.value.trim().toLowerCase();
@@ -24,6 +25,7 @@ async function renderForecast() {
   const response = await fetch(`/api/stations/${encodeURIComponent(selected)}/forecast?horizon=${horizon}`);
   const data = await response.json();
   const current = data.station;
+  const rawJson = escapeHtml(JSON.stringify(data, null, 2));
   const horizonButtons = [15, 30, 60].map((minutes) =>
     `<button data-horizon="${minutes}" class="${minutes === horizon ? "active" : ""}">${minutes} min</button>`
   ).join("");
@@ -31,15 +33,16 @@ async function renderForecast() {
   if (data.forecast) {
     const value = data.forecast;
     const guidance = data.guidance;
-    const guidancePanel = guidance ? `<section class="guidance risk-${escapeHtml(guidance.pickup_risk === "high" || guidance.return_risk === "high" ? "high" : guidance.pickup_risk === "medium" || guidance.return_risk === "medium" ? "medium" : "low")}">
-      <p class="label">Recommendation</p>
+    const dominantRisk = guidance?.pickup_risk === "high" || guidance?.return_risk === "high" ? "high" : guidance?.pickup_risk === "medium" || guidance?.return_risk === "medium" ? "medium" : "low";
+    const guidancePanel = guidance ? `<section class="guidance ${riskClass(dominantRisk)}">
+      <p class="label">Outcome</p>
       <h3>${escapeHtml(guidance.headline)}</h3>
+      <p class="recommendation">${escapeHtml(guidance.recommendation)}</p>
       <p>${escapeHtml(guidance.explanation)}</p>
       <div class="risk-grid">
-        <span>Pickup risk <strong>${escapeHtml(guidance.pickup_risk)}</strong></span>
-        <span>Return risk <strong>${escapeHtml(guidance.return_risk)}</strong></span>
+        <span class="${riskClass(guidance.pickup_risk)}">Pickup risk <strong>${escapeHtml(guidance.pickup_risk)}</strong></span>
+        <span class="${riskClass(guidance.return_risk)}">Return risk <strong>${escapeHtml(guidance.return_risk)}</strong></span>
       </div>
-      <p class="recommendation">${escapeHtml(guidance.recommendation)}</p>
     </section>` : "";
     outlook = `${guidancePanel}<details class="model-details"><summary>Model details</summary><div class="metrics">
       <div class="metric"><span>Expected departures</span><strong>${value.departures_expected}</strong></div>
@@ -55,7 +58,8 @@ async function renderForecast() {
     <p>${current.bikes_available} bikes now · ${current.docks_available} docks now</p>
     <p class="meta">Updated ${data.freshness_seconds}s ago</p>
     <div class="horizons" aria-label="Forecast horizon">${horizonButtons}</div>
-    ${outlook}${alternatives}`;
+    ${outlook}${alternatives}
+    <details class="json-details"><summary>Raw API JSON</summary><pre>${rawJson}</pre></details>`;
 }
 
 stationList.addEventListener("click", (event) => {

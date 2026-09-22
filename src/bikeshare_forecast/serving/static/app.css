@@ -35,15 +35,17 @@ input { width: 100%; padding: 12px 14px; border: 1px solid #9ba69e; border-radiu
 .guidance h3 { margin: 4px 0 8px; font-size: 1.45rem; }
 .guidance p { margin: 0 0 10px; }
 .guidance .label { text-transform: uppercase; font-size: .72rem; font-weight: 800; color: #526057; letter-spacing: .08em; }
-.guidance .recommendation { font-weight: 800; margin-bottom: 0; }
+.guidance .recommendation { font-weight: 800; font-size: 1.05rem; }
 .risk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
 .risk-grid span { padding: 10px 12px; border-radius: 8px; background: var(--paper); }
 .risk-grid strong { display: block; text-transform: capitalize; }
-.risk-low { border-color: #8ab99a; }
-.risk-medium { border-color: #d7a642; }
+.risk-low { border-color: #8ab99a; background: #f4faef; }
+.risk-medium { border-color: #d7a642; background: #fff8e6; }
 .risk-high { border-color: #c8523a; background: #fff2ec; }
 .model-details { margin-top: 12px; }
-.model-details summary { cursor: pointer; color: var(--green); font-weight: 750; margin-bottom: 10px; }
+.model-details summary, .json-details summary { cursor: pointer; color: var(--green); font-weight: 750; margin-bottom: 10px; }
+.json-details { margin-top: 18px; }
+.json-details pre { max-height: 340px; overflow: auto; padding: 14px; border-radius: 10px; background: #101914; color: #e5f2e9; font-size: .78rem; line-height: 1.45; }
 .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .metric { padding: 16px; background: #f4f5ef; border-radius: 12px; }
 .metric span, .metric strong { display: block; }
