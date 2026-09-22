@@ -83,8 +83,21 @@ class Alternative(BaseModel):
     demand_pressure: str
 
 
+class RiderGuidance(BaseModel):
+    """Plain-language station recommendation derived from status and forecast."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    headline: str
+    recommendation: str
+    pickup_risk: str
+    return_risk: str
+    explanation: str
+
+
 class ForecastResponse(ForecastResult):
     """Complete API forecast response."""
 
     freshness_seconds: int = Field(ge=0)
+    guidance: RiderGuidance | None = None
     alternatives: tuple[Alternative, ...] = ()

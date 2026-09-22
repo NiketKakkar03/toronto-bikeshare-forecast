@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from bikeshare_forecast.serving.models import (
     Alternative,
     ForecastResponse,
+    ForecastResult,
+    RiderGuidance,
     ServiceState,
     StationStatus,
 )
@@ -79,6 +81,52 @@ def _alternatives(
             )
         )
     return tuple(sorted(candidates, key=lambda item: (item.distance_metres, item.station_id))[:3])
+
+
+def _risk_level(available: float, capacity: int) -> str:
+    if available <= 1:
+        return "high"
+    if available <= 3 or (capacity and available / capacity < 0.15):
+        return "medium"
+    return "low"
+
+
+def _guidance(result: ForecastResult) -> RiderGuidance | None:
+    if result.forecast is None:
+        return None
+    station = result.station
+    forecast = result.forecast
+    bikes_expected = max(0.0, station.bikes_available + forecast.net_flow_expected)
+    docks_expected = max(0.0, station.docks_available - forecast.net_flow_expected)
+    pickup_risk = _risk_level(bikes_expected, station.capacity)
+    return_risk = _risk_level(docks_expected, station.capacity)
+    if pickup_risk == "low" and return_risk == "low":
+        headline = "Good for pickup and return"
+        recommendation = "Use this station"
+    elif pickup_risk == "high":
+        headline = "Risky for pickup"
+        recommendation = "Consider a nearby station with more bikes"
+    elif return_risk == "high":
+        headline = "Risky for return"
+        recommendation = "Consider a nearby station with more open docks"
+    elif pickup_risk == "medium" or return_risk == "medium":
+        headline = "Usable, but keep a backup"
+        recommendation = "Check a nearby alternative before relying on it"
+    else:
+        headline = "Station looks stable"
+        recommendation = "Use this station"
+    explanation = (
+        f"{station.bikes_available} bikes and {station.docks_available} docks are available now. "
+        f"Over the next {result.horizon_minutes} minutes, the model expects about "
+        f"{forecast.departures_expected:.1f} pickups and {forecast.arrivals_expected:.1f} returns."
+    )
+    return RiderGuidance(
+        headline=headline,
+        recommendation=recommendation,
+        pickup_risk=pickup_risk,
+        return_risk=return_risk,
+        explanation=explanation,
+    )
 
 
 def create_app(
@@ -149,6 +197,7 @@ def create_app(
         return ForecastResponse(
             **result.model_dump(),
             freshness_seconds=age,
+            guidance=_guidance(result),
             alternatives=_alternatives(source, current, horizon)
             if result.state is ServiceState.AVAILABLE
             else (),

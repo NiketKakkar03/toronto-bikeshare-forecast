@@ -59,6 +59,16 @@ def test_forecast_includes_versions_demand_and_operational_alternatives() -> Non
     assert body["forecast"]["arrivals_expected"] >= 0
     assert body["forecast"]["net_flow_expected"] == -0.8
     assert body["forecast"]["demand_pressure"] == "moderate"
+    assert body["guidance"] == {
+        "headline": "Good for pickup and return",
+        "recommendation": "Use this station",
+        "pickup_risk": "low",
+        "return_risk": "low",
+        "explanation": (
+            "6 bikes and 14 docks are available now. Over the next 30 minutes, "
+            "the model expects about 2.8 pickups and 2.0 returns."
+        ),
+    }
     assert [alternative["station_id"] for alternative in body["alternatives"]] == [
         "7003",
         "7002",
@@ -76,6 +86,50 @@ def test_stale_data_suppresses_forecast_but_keeps_current_status() -> None:
     assert body["station"]["bikes_available"] == 6
     assert body["alternatives"] == []
     assert "suppressed" in body["reason"]
+
+
+def test_guidance_flags_return_risk_when_docks_are_full() -> None:
+    station = StationStatus(
+        station_id="7100",
+        name="Full Station",
+        latitude=43.65,
+        longitude=-79.38,
+        capacity=27,
+        bikes_available=25,
+        docks_available=0,
+        is_renting=True,
+        is_returning=True,
+        observed_at=NOW,
+        data_version="test",
+    )
+
+    class Provider:
+        def stations(self) -> tuple[StationStatus, ...]:
+            return (station,)
+
+        def forecast(self, station_id: str, horizon_minutes: int) -> ForecastResult:
+            return ForecastResult(
+                state=ServiceState.AVAILABLE,
+                station=station,
+                horizon_minutes=horizon_minutes,
+                data_version=station.data_version,
+                forecast=ForecastValues(
+                    departures_expected=0.79,
+                    arrivals_expected=0.24,
+                    net_flow_expected=-0.56,
+                    demand_pressure="low",
+                ),
+            )
+
+    response = TestClient(create_app(Provider(), clock=lambda: NOW)).get(
+        "/api/stations/7100/forecast"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["guidance"]["headline"] == "Risky for return"
+    assert body["guidance"]["pickup_risk"] == "low"
+    assert body["guidance"]["return_risk"] == "high"
 
 
 def test_model_unavailable_keeps_fresh_current_status() -> None:

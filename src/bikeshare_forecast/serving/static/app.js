@@ -30,20 +30,30 @@ async function renderForecast() {
   let outlook = `<p class="notice"><strong>Forecast ${escapeHtml(data.state)}.</strong> ${escapeHtml(data.reason || "Try again shortly.")}</p>`;
   if (data.forecast) {
     const value = data.forecast;
-    outlook = `<div class="metrics">
+    const guidance = data.guidance;
+    const guidancePanel = guidance ? `<section class="guidance risk-${escapeHtml(guidance.pickup_risk === "high" || guidance.return_risk === "high" ? "high" : guidance.pickup_risk === "medium" || guidance.return_risk === "medium" ? "medium" : "low")}">
+      <p class="label">Recommendation</p>
+      <h3>${escapeHtml(guidance.headline)}</h3>
+      <p>${escapeHtml(guidance.explanation)}</p>
+      <div class="risk-grid">
+        <span>Pickup risk <strong>${escapeHtml(guidance.pickup_risk)}</strong></span>
+        <span>Return risk <strong>${escapeHtml(guidance.return_risk)}</strong></span>
+      </div>
+      <p class="recommendation">${escapeHtml(guidance.recommendation)}</p>
+    </section>` : "";
+    outlook = `${guidancePanel}<details class="model-details"><summary>Model details</summary><div class="metrics">
       <div class="metric"><span>Expected departures</span><strong>${value.departures_expected}</strong></div>
       <div class="metric"><span>Expected arrivals</span><strong>${value.arrivals_expected}</strong></div>
       <div class="metric"><span>Expected net flow</span><strong>${value.net_flow_expected}</strong><small>arrivals minus departures</small></div>
       <div class="metric"><span>Demand pressure</span><strong>${escapeHtml(value.demand_pressure)}</strong></div>
-    </div>`;
+    </div></details>`;
   }
   const alternatives = data.alternatives.length ? `<h3>Nearby alternatives</h3><ol class="alternatives">${data.alternatives.map((item) =>
-    `<li><strong>${escapeHtml(item.name)}</strong> · ${item.distance_metres} m · ${escapeHtml(item.demand_pressure)} demand pressure</li>`
+    `<li><strong>${escapeHtml(item.name)}</strong> · ${item.distance_metres} m · ${item.bikes_available} bikes · ${item.docks_available} docks</li>`
   ).join("")}</ol>` : "";
   detail.innerHTML = `<h2>${escapeHtml(current.name)}</h2>
     <p>${current.bikes_available} bikes now · ${current.docks_available} docks now</p>
-    <p class="meta">Updated ${data.freshness_seconds}s ago · data ${escapeHtml(current.data_version)}</p>
-    <p class="coordinate">${current.latitude.toFixed(4)}, ${current.longitude.toFixed(4)}</p>
+    <p class="meta">Updated ${data.freshness_seconds}s ago</p>
     <div class="horizons" aria-label="Forecast horizon">${horizonButtons}</div>
     ${outlook}${alternatives}`;
 }

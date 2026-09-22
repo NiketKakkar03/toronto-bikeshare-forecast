@@ -21,6 +21,7 @@ def test_ui_shell_and_static_assets_are_served_offline() -> None:
     assert script.status_code == 200
     assert "/api/stations/" in script.text
     assert "data-horizon" in script.text
-    assert "Expected departures" in script.text
+    assert "Recommendation" in script.text
+    assert "Model details" in script.text
     assert stylesheet.status_code == 200
     assert ".risk-high" in stylesheet.text
