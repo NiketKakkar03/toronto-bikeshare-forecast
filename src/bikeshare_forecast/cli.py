@@ -278,12 +278,14 @@ def serve(
     model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
     host: Annotated[str, typer.Option()] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
+    refresh: Annotated[bool, typer.Option("--refresh/--skip-refresh")] = True,
 ) -> None:
     """Refresh live GBFS status once, then serve historical demand forecasts."""
     config = load_collection_config(config_path)
-    report = StationCollector(config).collect_once()
-    if report.outcome != "success":
-        raise typer.BadParameter(f"live station refresh failed: {report.error_message}")
+    if refresh:
+        report = StationCollector(config).collect_once()
+        if report.outcome != "success":
+            raise typer.BadParameter(f"live station refresh failed: {report.error_message}")
     provider = ArtifactForecastProvider(
         config.storage.silver_dir,
         model_dir,
