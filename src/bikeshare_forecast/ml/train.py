@@ -1,10 +1,16 @@
-"""Scalable deterministic ridge-regression station-demand training."""
+"""Station-demand training for deterministic linear and boosted models."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import duckdb
+import joblib  # type: ignore[import-untyped]
+import polars as pl
+from sklearn.ensemble import (  # type: ignore[import-untyped]
+    HistGradientBoostingClassifier,
+    HistGradientBoostingRegressor,
+)
 
 from bikeshare_forecast.ml.common import read_json, sha256_file, write_json
 from bikeshare_forecast.ml.dataset import FEATURE_COLUMNS
@@ -37,7 +43,7 @@ def _sql_path(path: Path) -> str:
 
 
 def train_models(dataset_dir: Path, output_dir: Path) -> Path:
-    """Train departure and arrival ridge models from streaming sufficient statistics."""
+    """Train departure and arrival models from point-in-time features."""
     dataset_path = dataset_dir / "dataset.parquet"
     manifest = read_json(dataset_dir / "dataset-manifest.json")
     expected_hash = manifest.get("dataset_sha256")
@@ -120,6 +126,83 @@ def train_models(dataset_dir: Path, output_dir: Path) -> Path:
                 path = output_dir / f"ridge-{target}-{horizon}m.json"
                 write_json(path, model)
                 files.append({"path": path.name, "sha256": sha256_file(path)})
+    training_frame = pl.read_parquet(dataset_path).filter(pl.col("split") == "train")
+    features = training_frame.select(columns).to_numpy()
+    for horizon_value in manifest["config"]["horizons_minutes"]:
+        horizon = int(horizon_value)
+        for target in ("departures", "arrivals"):
+            label = f"target_{target}_{horizon}m"
+            boosted_values = training_frame[label].to_numpy()
+            regressor = HistGradientBoostingRegressor(
+                learning_rate=0.08,
+                max_iter=120,
+                max_leaf_nodes=31,
+                l2_regularization=0.01,
+                random_state=20260930,
+            )
+            regressor.fit(features, boosted_values)
+            regressor_path = output_dir / f"histgb-{target}-{horizon}m.joblib"
+            joblib.dump(
+                {
+                    "schema_version": 1,
+                    "model_type": "hist_gradient_boosting_regressor",
+                    "target": target,
+                    "horizon_minutes": horizon,
+                    "feature_columns": columns,
+                    "dataset_sha256": expected_hash,
+                    "training_rows": training_rows,
+                    "model": regressor,
+                },
+                regressor_path,
+            )
+            files.append({"path": regressor_path.name, "sha256": sha256_file(regressor_path)})
+            event = (training_frame[label] > 0).to_numpy()
+            event_path = output_dir / f"histgb-{target}-event-{horizon}m.joblib"
+            if len(set(bool(value) for value in event)) < 2:
+                write_json(
+                    event_path.with_suffix(".json"),
+                    {
+                        "schema_version": 1,
+                        "model_type": "constant_event_probability",
+                        "target": target,
+                        "horizon_minutes": horizon,
+                        "feature_columns": columns,
+                        "dataset_sha256": expected_hash,
+                        "training_rows": training_rows,
+                        "probability": float(event.mean()),
+                        "reason": "training labels contain a single class",
+                    },
+                )
+                files.append(
+                    {
+                        "path": event_path.with_suffix(".json").name,
+                        "sha256": sha256_file(event_path.with_suffix(".json")),
+                    }
+                )
+                continue
+            classifier = HistGradientBoostingClassifier(
+                learning_rate=0.08,
+                max_iter=120,
+                max_leaf_nodes=31,
+                l2_regularization=0.01,
+                random_state=20260930,
+            )
+            classifier.fit(features, event)
+            joblib.dump(
+                {
+                    "schema_version": 1,
+                    "model_type": "hist_gradient_boosting_classifier",
+                    "target": target,
+                    "horizon_minutes": horizon,
+                    "feature_columns": columns,
+                    "dataset_sha256": expected_hash,
+                    "training_rows": training_rows,
+                    "positive_label": f"target_{target}_{horizon}m > 0",
+                    "model": classifier,
+                },
+                event_path,
+            )
+            files.append({"path": event_path.name, "sha256": sha256_file(event_path)})
     path = output_dir / "model-manifest.json"
     write_json(
         path,

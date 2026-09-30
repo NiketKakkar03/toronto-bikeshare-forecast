@@ -5,8 +5,9 @@ arrivals, and net flow over the next 15, 30, or 60 minutes. Demand forecasts are
 as guaranteed future inventory.
 
 This repository contains typed source contracts, collector and storage foundations, offline
-historical adapters, a deterministic point-in-time ML pipeline, and a dependency-injected product
-serving slice. The collector discovers advertised GBFS URLs, retries bounded transient failures,
+historical adapters, a point-in-time ML pipeline with ridge and histogram gradient boosting models,
+and a dependency-injected product serving slice. The collector discovers advertised GBFS URLs,
+retries bounded transient failures,
 captures immutable raw JSON, versions station metadata, retains validation/failure reports, and
 writes valid snapshots to append-only Parquet. The serving boundary supports both deterministic
 fixture forecasts and an artifact-backed provider that verifies model hashes and scores the latest
@@ -104,14 +105,24 @@ perform network calls. Invalid rows are printed with their source row number and
 write; valid imports retain file hash, row number, retrieval time, source schema, and adapter
 version in Parquet. Add a new adapter version rather than silently changing a published mapping.
 
-Build the point-in-time demand dataset, train departure and arrival regressors, and evaluate the
-held-out chronological test split:
+Build the point-in-time demand dataset, train departure and arrival regressors, evaluate the
+held-out chronological test split, score a batch split, and run expanding-window backtests:
 
 ```bash
 uv run bikeshare dataset-build --historical-dir data/historical
 uv run bikeshare train
 uv run bikeshare evaluate
+uv run bikeshare score-batch
+uv run bikeshare backtest
 ```
+
+Evaluation reports count MAE/RMSE against recent-rate baselines, validation-calibrated prediction
+interval coverage, and demand-event precision, recall, ROC-AUC, PR-AUC, and Brier score. Batch
+predictions and backtests include SHA-256 manifests so results can be tied back to the exact
+dataset and model artifacts.
+
+See [the Q1 2024 model benchmark](docs/benchmark-results.md) for real-data holdout and
+expanding-window results across all forecast horizons.
 
 Start the real application with one live GBFS refresh—no recurring collection required:
 

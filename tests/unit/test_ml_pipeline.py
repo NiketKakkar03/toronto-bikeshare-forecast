@@ -6,7 +6,14 @@ from typer.testing import CliRunner
 
 from bikeshare_forecast.cli import app
 from bikeshare_forecast.contracts import StationSnapshot
-from bikeshare_forecast.ml import build_dataset, diagnostics_run, evaluate_run, train_models
+from bikeshare_forecast.ml import (
+    backtest_run,
+    build_dataset,
+    diagnostics_run,
+    evaluate_run,
+    score_batch,
+    train_models,
+)
 from bikeshare_forecast.ml.common import read_json
 from bikeshare_forecast.serving import ArtifactForecastProvider
 from bikeshare_forecast.storage import SilverStore
@@ -79,7 +86,23 @@ def test_demand_pipeline_is_temporal_and_persists_artifacts(tmp_path: Path) -> N
     train_models(first, models)
     report = read_json(evaluate_run(first, models, reports))
     assert "rmse" in report["metrics"]["30m"]["departures"]["ridge"]
+    boosted = report["metrics"]["30m"]["departures"]["hist_gradient_boosting"]
+    assert "rmse" in boosted["regression"]
+    assert {"precision_at_0_5", "recall_at_0_5", "pr_auc", "roc_auc", "brier_score"} <= boosted[
+        "demand_event"
+    ].keys()
     assert "mae" in report["metrics"]["60m"]["net_flow"]["derived_ridge"]
+    predictions = tmp_path / "predictions"
+    scored = score_batch(first, models, predictions)
+    assert scored.exists()
+    prediction_frame = pl.read_parquet(scored)
+    assert "predicted_departures_30m" in prediction_frame.columns
+    assert "probability_departures_event_30m" in prediction_frame.columns
+    backtest = read_json(
+        backtest_run(first, tmp_path / "backtest", folds=2, minimum_train_fraction=0.4)
+    )
+    assert backtest["fold_count"] == 2
+    assert "30m" in backtest["mean_metrics"]
     silver = tmp_path / "silver"
     SilverStore(silver).write_snapshots(_snapshots())
     provider = ArtifactForecastProvider(
@@ -93,11 +116,13 @@ def test_demand_pipeline_is_temporal_and_persists_artifacts(tmp_path: Path) -> N
 
 
 def test_pipeline_cli_commands(tmp_path: Path) -> None:
-    historical, dataset, models, reports = (
+    historical, dataset, models, reports, predictions, backtests = (
         tmp_path / "historical",
         tmp_path / "dataset",
         tmp_path / "models",
         tmp_path / "reports",
+        tmp_path / "predictions",
+        tmp_path / "backtests",
     )
     _history(historical)
     runner = CliRunner()
@@ -119,8 +144,37 @@ def test_pipeline_cli_commands(tmp_path: Path) -> None:
             str(reports),
         ],
     )
-    assert built.exit_code == trained.exit_code == evaluated.exit_code == 0
+    scored = runner.invoke(
+        app,
+        [
+            "score-batch",
+            "--dataset-dir",
+            str(dataset),
+            "--model-dir",
+            str(models),
+            "--output-dir",
+            str(predictions),
+        ],
+    )
+    backtested = runner.invoke(
+        app,
+        [
+            "backtest",
+            "--dataset-dir",
+            str(dataset),
+            "--output-dir",
+            str(backtests),
+            "--folds",
+            "2",
+            "--minimum-train-fraction",
+            "0.4",
+        ],
+    )
+    assert built.exit_code == trained.exit_code == evaluated.exit_code == scored.exit_code == 0
+    assert backtested.exit_code == 0, backtested.output
     assert (reports / "evaluation.json").exists()
+    assert (predictions / "prediction-manifest.json").exists()
+    assert (backtests / "backtest.json").exists()
 
 
 def test_station_diagnostics_report_and_cli(tmp_path: Path) -> None:

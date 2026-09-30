@@ -39,6 +39,7 @@ data/raw/**
 data/silver/**
 data/gold/**
 data/historical/**
+data/historical-*/**
 data/reports/**
 data/source/**
 !data/raw/.gitkeep

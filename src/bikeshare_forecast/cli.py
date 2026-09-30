@@ -17,9 +17,11 @@ from bikeshare_forecast.ingestion import (
 )
 from bikeshare_forecast.ml import (
     DatasetConfig,
+    backtest_run,
     build_dataset,
     diagnostics_run,
     evaluate_run,
+    score_batch,
     train_models,
 )
 from bikeshare_forecast.operations import CollectionReportStore, StationCollector
@@ -251,6 +253,46 @@ def evaluate(
 ) -> None:
     """Evaluate demand regressors and baselines on the held-out test split."""
     typer.echo(evaluate_run(dataset_dir, model_dir, output_dir))
+
+
+@app.command("score-batch")
+def score_batch_command(
+    dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    model_dir: Annotated[Path, typer.Option()] = Path("artifacts/models"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/predictions"),
+    split: Annotated[str, typer.Option()] = "test",
+    model_family: Annotated[str, typer.Option()] = "hist_gradient_boosting",
+) -> None:
+    """Write reproducible batch forecasts for a chronological dataset split."""
+    typer.echo(
+        score_batch(
+            dataset_dir,
+            model_dir,
+            output_dir,
+            split=split,
+            model_family=model_family,
+        )
+    )
+
+
+@app.command("backtest")
+def backtest(
+    dataset_dir: Annotated[Path, typer.Option()] = Path("artifacts/dataset"),
+    output_dir: Annotated[Path, typer.Option()] = Path("artifacts/backtest"),
+    folds: Annotated[int, typer.Option(min=2)] = 3,
+    minimum_train_fraction: Annotated[float, typer.Option(min=0.01, max=0.99)] = 0.5,
+    evaluation_fraction: Annotated[float, typer.Option(min=0.01, max=0.99)] = 0.1,
+) -> None:
+    """Run expanding-window chronological backtests."""
+    typer.echo(
+        backtest_run(
+            dataset_dir,
+            output_dir,
+            folds=folds,
+            minimum_train_fraction=minimum_train_fraction,
+            evaluation_fraction=evaluation_fraction,
+        )
+    )
 
 
 @app.command("diagnostics")
